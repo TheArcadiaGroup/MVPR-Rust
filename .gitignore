@@ -10,3 +10,5 @@ Cargo.lock
 **/*.rs.bk
 
 tests/wasm/contract.wasm
+*.wasm
+wasm
