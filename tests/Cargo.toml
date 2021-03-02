@@ -1,0 +1,14 @@
+[package]
+name = "tests"
+version = "0.2.0"
+authors = ["karandh <karan@casperlabs.io>", "Maciej Zieliński <maciej@casperlabs.io>"]
+edition = "2018"
+
+[dependencies]
+casper-contract = "0.7.6"
+casper-types = "0.7.6"
+casper-engine-test-support = "0.7.6"
+
+[features]
+default = ["casper-contract/std", "casper-types/std", "casper-contract/test-support"]
+
