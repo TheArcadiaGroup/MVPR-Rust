@@ -1,18 +1,17 @@
 #[cfg(test)]
 mod tests {
     use casper_engine_test_support::{Code, SessionBuilder, TestContextBuilder};
-    use casper_types::{account::AccountHash, runtime_args, RuntimeArgs, U512,PublicKey};
-
+    use casper_types::{account::AccountHash, runtime_args, PublicKey, RuntimeArgs, U512};
 
     #[test]
     fn should_initialize_to_zero() {
-    let ali : PublicKey = PublicKey::ed25519([3u8; 32]).unwrap();
-    let MY_ACCOUNT: AccountHash = ali.to_account_hash();
-    const KEY: &str = "special_value";
-    const CONTRACT: &str = "tutorial";
+        let ali: PublicKey = PublicKey::ed25519([3u8; 32]).unwrap();
+        let MY_ACCOUNT: AccountHash = ali.to_account_hash();
+        const KEY: &str = "special_value";
+        const CONTRACT: &str = "tutorial";
 
         let mut context = TestContextBuilder::new()
-            .with_public_key(ali,ali.to_account_hash(), U512::from(128_000_000))
+            .with_public_key(ali, ali.to_account_hash(), U512::from(128_000_000))
             .build();
         let session_code = Code::from("contract.wasm");
         let session_args = runtime_args! {
