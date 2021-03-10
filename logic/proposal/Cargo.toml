@@ -1,0 +1,13 @@
+[package]
+name = "proposal_logic"
+version = "0.1.0"
+authors = ["Yassine Amor <yassine@arcadiamgroup.com>"]
+edition = "2018"
+
+[lib]
+name = "proposal_logic"
+doctest = false
+bench = false
+
+[dependencies]
+casperlabs-types="0.6.1"

@@ -23,6 +23,7 @@ use types::{
     runtime_args, ApiError, CLType, CLTyped, CLValue, Group, Parameter, RuntimeArgs, URef, U256,
 };
 
+const CURRENT_SUPPLY_KEY: &str = "_currentSupply";
 #[casperlabs_contract]
 mod Reputation {
 
@@ -68,6 +69,35 @@ mod Reputation {
     #[casperlabs_method]
     fn balance_of(account: AccountHash) -> U256 {
         get_key(&balance_key(&account))
+    }
+
+    #[casperlabs_method]
+    fn transferFrom(from: AccountHash, to: AccountHash, amount: U256) {
+        assert_admin();
+        let mut sender_balance: U256 = get_key(&balance_key(&from));
+        let mut receiver_balance: U256 = get_key(&balance_key(&to));
+        sender_balance = sender_balance - amount;
+        receiver_balance = receiver_balance + amount;
+        set_key(&balance_key(&from), sender_balance);
+        set_key(&balance_key(&to), receiver_balance);
+    }
+    #[casperlabs_method]
+    fn mint(account: AccountHash, amount: U256) {
+        assert_admin();
+        let mut currentSupply: U256 = get_key(CURRENT_SUPPLY_KEY);
+        currentSupply = currentSupply + amount;
+        set_key(&CURRENT_SUPPLY_KEY, currentSupply);
+        let new_balance: U256 = get_key(&balance_key(&account));
+        set_key(&balance_key(&account), new_balance + amount);
+    }
+    #[casperlabs_method]
+    fn burn(account: AccountHash, amount: U256) {
+        assert_admin();
+        let mut currentSupply: U256 = get_key(CURRENT_SUPPLY_KEY);
+        currentSupply = currentSupply - amount;
+        set_key(&CURRENT_SUPPLY_KEY, currentSupply);
+        let new_balance: U256 = get_key(&balance_key(&account));
+        set_key(&balance_key(&account), new_balance - amount);
     }
 
     #[casperlabs_method]
