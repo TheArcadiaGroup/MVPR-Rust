@@ -49,10 +49,20 @@ mod ProposalEngine {
     }
 
     #[casperlabs_method]
-    fn hasLimit() -> bool {
+    fn create_proposal(
+        name: String,
+        storage_pointer: String,
+        storage_fingerprint: String,
+        category: u8,
+        citations: Vec<U256>,
+        ratios: Vec<U256>,
+        vote_configuration: Vec<U256>,
+        milestone_types: Vec<U256>,
+        milestone_progress_percentage: Vec<U256>,
+        staked_rep: U256,
+    ) -> bool {
         false
     }
-   
 }
 #[repr(u16)]
 pub enum Error {
@@ -88,8 +98,7 @@ pub fn assert_admin() {
 
 pub fn assert_proposal_owner(proposalId: U256) {
     let caller = runtime::get_caller();
-
-}   
+}
 
 impl From<Error> for ApiError {
     fn from(error: Error) -> ApiError {
@@ -123,4 +132,3 @@ fn set_key<T: ToBytes + CLTyped>(name: &str, value: T) {
 fn proposal_key(id: &U256) -> String {
     format!("_proposals_{}", id)
 }
-
