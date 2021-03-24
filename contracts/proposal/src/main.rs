@@ -39,16 +39,6 @@ mod ProposalEngine {
     }
 
     #[casperlabs_method]
-    fn symbol() -> String {
-        get_key("_symbol")
-    }
-
-    #[casperlabs_method]
-    fn currentSupply() -> U256 {
-        get_key("_currentSupply")
-    }
-
-    #[casperlabs_method]
     fn create_proposal(
         name: String,
         storage_pointer: String,
@@ -75,7 +65,6 @@ pub enum ProposalStatus {
     FullVote,
     Withdrawn,
     Rejected,
-    MajorityNotReachedButAccepted,
     Discussion,
     PendingApproval,
 }
