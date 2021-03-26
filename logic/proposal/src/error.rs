@@ -2,7 +2,7 @@
 pub struct StartNotBeforeEnd;
 
 #[derive(PartialEq, Debug)]
-pub enum Error {
+pub enum VotingError {
     NotEnoughVotingPower,
     ProjectDoesNotExists,
     NotAParticipant,

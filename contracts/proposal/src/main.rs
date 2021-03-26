@@ -27,7 +27,7 @@ use types::{
     runtime_args, ApiError, CLType, CLTyped, CLValue, Group, Parameter, RuntimeArgs, URef, U256,
 };
 
-use proposal_logic::Proposal;
+use proposal_logic::{Proposal, ProposalError};
 
 const MINIMUM_STABILITY_TIME_KEY: &str = "minimum_stability_time";
 const POLICING_RATIO: &str = "proposal_ratio";
@@ -125,8 +125,7 @@ mod ProposawlEngine {
 
 fn save_proposal(proposal: Proposal) {
     let mut test: BTreeMap<u64, String> = BTreeMap::new();
-    let io: ((u8,((u8,u8,u8),(u8, u64, u64),(u8,u8,u8)))) = ((1,((2,3,4),(2, 10, 10),(1,1,1))));
-    set_key(PROPOSALS_KEY, io);
+    set_key(PROPOSALS_KEY, proposal.serialize());
 }
 
 fn read_voting() -> Proposal {
@@ -138,6 +137,10 @@ pub enum Error {
     NotTheAdminAccount,
     InvalidPolicingRatio,
     NotAMember,
+    InvalidCategory,
+    InvalidMilestonesProgressPercentages,
+    ProjectCostNotEqualToMilestonesSum,
+    StakedRepGreaterThanReputationBalance,
 }
 #[repr(u16)]
 pub enum ProposalStatus {
@@ -173,6 +176,24 @@ pub fn assert_proposal_owner(proposalId: U256) {
 impl From<Error> for ApiError {
     fn from(error: Error) -> ApiError {
         ApiError::User(error as u16)
+    }
+}
+
+impl From<ProposalError> for Error {
+    fn from(error: ProposalError) -> Error {
+        match error {
+            ProposalError::InvalidCategory => Error::InvalidCategory,
+            ProposalError::InvalidPolicingRatio => Error::InvalidPolicingRatio,
+            ProposalError::InvalidMilestonesProgressPercentages => {
+                Error::InvalidMilestonesProgressPercentages
+            }
+            ProposalError::ProjectCostNotEqualToMilestonesSum => {
+                Error::ProjectCostNotEqualToMilestonesSum
+            }
+            ProposalError::StakedRepGreaterThanReputationBalance => {
+                Error::StakedRepGreaterThanReputationBalance
+            }
+        }
     }
 }
 
