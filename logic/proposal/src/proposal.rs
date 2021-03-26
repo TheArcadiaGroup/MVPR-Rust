@@ -68,29 +68,42 @@ pub enum ProposalStatus {
 }
 
 type ProposalSerialized = (
-    // name, storage_pointer, storage_fingerprint
-    (String, String, String),
-    // proposal type
-    u8,
-    // proposer
-    [u8; 32],
-    // citations
-    Vec<u64>,
-    // ratios
-    RatiosSerialized,
-    // vote configuration
-    VoteConfigurationSerialized,
-    // milestones
-    MilestoneSerialized,
-    // Proposal status
-    u8,
-    // Sponsors
-    SponsorsSerialized,
-    // cost
-    U256,
+    (
+        // 0
+        // name, storage_pointer, storage_fingerprint
+        (String, String, String), // 0.0
+        (
+            // 0.1
+            // proposal type
+            u8,
+            // proposer
+            [u8; 32],
+            // citations
+            Vec<u64>,
+        ),
+        (
+            // 0.2
+            // ratios
+            RatiosSerialized,
+            // vote configuration
+            VoteConfigurationSerialized,
+            // milestones
+            MilestoneSerialized,
+        ),
+    ),
+    (
+        // 1
+        // Proposal status
+        u8, // 0.0
+        // Sponsors
+        SponsorsSerialized, // 0.1
+        // cost
+        U256, //0.2
+    ),
 );
+
 type MilestoneSerialized =
-    BTreeMap<u64, (u8, u8, u8, BTreeMap<u64, FundingTrancheSerialized>, u64)>;
+    BTreeMap<u64, ((u8, u8, u8), BTreeMap<u64, FundingTrancheSerialized>, u64)>;
 
 type SponsorsSerialized = BTreeMap<[u8; 32], U256>;
 
@@ -224,19 +237,27 @@ impl Proposal {
     pub fn serialize(&self) -> ProposalSerialized {
         (
             (
-                self.name.clone(),
-                self.storagePointer.clone(),
-                self.storageFingerprint.clone(),
+                (
+                    self.name.clone(),
+                    self.storagePointer.clone(),
+                    self.storageFingerprint.clone(),
+                ),
+                (
+                    self.proposal_type as u8,
+                    self.proposer.value(),
+                    self.citations.clone(),
+                ),
+                (
+                    self.serialize_ratios(),
+                    self.serialize_vote_configuration(),
+                    self.serialize_milestones(),
+                ),
             ),
-            self.proposal_type as u8,
-            self.proposer.value(),
-            self.citations.clone(),
-            self.serialize_ratios(),
-            self.serialize_vote_configuration(),
-            self.serialize_milestones(),
-            self.proposal_status as u8,
-            self.serialize_sponsors(),
-            self.cost,
+            (
+                self.proposal_status as u8,
+                self.serialize_sponsors(),
+                self.cost,
+            ),
         )
     }
 
@@ -261,10 +282,7 @@ impl Proposal {
         )
     }
     fn serialize_milestones(&self) -> MilestoneSerialized {
-        let mut serialized_milestones: BTreeMap<
-            u64,
-            (u8, u8, u8, BTreeMap<u64, FundingTrancheSerialized>, u64),
-        > = BTreeMap::new();
+        let mut serialized_milestones: MilestoneSerialized = BTreeMap::new();
         for (key, milestone) in self.milestones.iter() {
             let mut serialized_funding_tranches: BTreeMap<u64, FundingTrancheSerialized> =
                 BTreeMap::new();
@@ -273,9 +291,11 @@ impl Proposal {
             serialized_milestones.insert(
                 key.clone(),
                 (
-                    milestone.milestone_type,
-                    milestone.progress_percentage,
-                    milestone.result,
+                    (
+                        milestone.milestone_type,
+                        milestone.progress_percentage,
+                        milestone.result,
+                    ),
                     serialized_funding_tranches,
                     milestone.funding_tranches_size,
                 ),
@@ -310,32 +330,32 @@ impl Proposal {
     }
     pub fn deserialize(serialized_proposal: ProposalSerialized) -> Proposal {
         let mut proposal_type: ProposalType = ProposalType::Grant;
-        if (serialized_proposal.1 == 1) {
+        if (serialized_proposal.0 .1 .0 == 1) {
             proposal_type = ProposalType::Signaling;
         }
         Proposal {
-            name: serialized_proposal.0 .0,
-            storagePointer: serialized_proposal.0 .1,
-            storageFingerprint: serialized_proposal.0 .2,
+            name: serialized_proposal.0 .0 .0,
+            storagePointer: serialized_proposal.0 .0 .1,
+            storageFingerprint: serialized_proposal.0 .0 .2,
             proposal_type: proposal_type,
-            proposer: AccountHash::new(serialized_proposal.2),
-            citations: serialized_proposal.3,
+            proposer: AccountHash::new(serialized_proposal.0 .1 .1),
+            citations: serialized_proposal.0 .1 .2,
             ratios: Ratios {
-                policing_ratio: *serialized_proposal.4.get(0).unwrap(),
-                op_ratio: *serialized_proposal.4.get(1).unwrap(),
-                citation_ratio: *serialized_proposal.4.get(2).unwrap(),
+                policing_ratio: *serialized_proposal.0 .2 .0.get(0).unwrap(),
+                op_ratio: *serialized_proposal.0 .2 .0.get(1).unwrap(),
+                citation_ratio: *serialized_proposal.0 .2 .0.get(2).unwrap(),
             },
             vote_configuration: VoteConfiguration {
-                member_quorum: serialized_proposal.5 .0 .0,
-                reputation_quorum: serialized_proposal.5 .0 .1,
-                threshold: serialized_proposal.5 .1 .0,
-                timeout: serialized_proposal.5 .1 .1,
-                voter_staking_limits: serialized_proposal.5 .1 .2,
+                member_quorum: serialized_proposal.0 .2 .1 .0 .0,
+                reputation_quorum: serialized_proposal.0 .2 .1 .0 .1,
+                threshold: serialized_proposal.0 .2 .1 .1 .0,
+                timeout: serialized_proposal.0 .2 .1 .1 .1,
+                voter_staking_limits: serialized_proposal.0 .2 .1 .1 .2,
             },
-            milestones: Self::deserialize_milestones(serialized_proposal.6),
-            proposal_status: serialized_proposal.7.into(),
-            sponsors: Self::deserialize_sponsors(serialized_proposal.8),
-            cost: serialized_proposal.9,
+            milestones: Self::deserialize_milestones(serialized_proposal.0 .2 .2),
+            proposal_status: serialized_proposal.1 .0.into(),
+            sponsors: Self::deserialize_sponsors(serialized_proposal.1 .1),
+            cost: serialized_proposal.1 .2,
         }
     }
 
@@ -347,11 +367,11 @@ impl Proposal {
             deserialized_milestones.insert(
                 key,
                 Milestone {
-                    milestone_type: milestone.0,
-                    progress_percentage: milestone.1,
-                    result: milestone.2,
-                    funding_tranches: Self::deserialize_funding_tranches(milestone.3),
-                    funding_tranches_size: milestone.4,
+                    milestone_type: milestone.0 .0,
+                    progress_percentage: milestone.0 .1,
+                    result: milestone.0 .2,
+                    funding_tranches: Self::deserialize_funding_tranches(milestone.1),
+                    funding_tranches_size: milestone.2,
                 },
             );
         }
