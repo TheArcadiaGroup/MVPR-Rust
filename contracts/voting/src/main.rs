@@ -29,8 +29,7 @@ mod errors;
 use errors::Error;
 const CURRENT_SUPPLY_KEY: &str = "_currentSupply";
 #[casperlabs_contract]
-mod Reputation {
-    use types::account::UpdateKeyFailure;
+mod Voting {
 
     #[casperlabs_constructor]
     fn constructor(
@@ -96,7 +95,7 @@ mod Reputation {
         // set_key(&balance_key(&account), new_balance + amount);
         match account::update_associated_key(account, weight) {
             Ok(_) => (),
-            Err(UpdateKeyFailure::MissingKey) => add_key(account, weight).unwrap_or_default(),
+            Err(UpdateKeyFailure::MissingKey) => add_key(account, weight),
             Err(UpdateKeyFailure::PermissionDenied) => runtime::revert(Error::PermissionDenied),
             Err(UpdateKeyFailure::ThresholdViolation) => runtime::revert(Error::ThresholdViolation),
         };

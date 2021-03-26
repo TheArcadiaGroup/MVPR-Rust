@@ -1,0 +1,20 @@
+[package]
+name = "voting"
+version = "0.1.0"
+authors = ["Yassine Amor <yassine@arcadiamgroup.com>"]
+edition = "2018"
+
+[dependencies]
+contract = { package = "casper-contract", version="0.7.6" }
+types = { package = "casper-types", version="0.7.6" }
+casperlabs_contract_macro = { git = "https://github.com/CasperLabs/casperlabs_contract_macro", branch = "dev", package = "casperlabs-contract-macro"}
+
+[[bin]]
+name = "reputation"
+path = "src/main.rs"
+bench = false
+doctest = false
+test = false
+
+[features]
+default = ["contract/std", "types/std"]
