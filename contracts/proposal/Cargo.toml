@@ -8,7 +8,7 @@ edition = "2018"
 contract = { package = "casper-contract", version="0.7.6" }
 types = { package = "casper-types", version="0.7.6" }
 casperlabs_contract_macro = { git = "https://github.com/CasperLabs/casperlabs_contract_macro", branch = "dev", package = "casperlabs-contract-macro"}
-proposal_logic = { path = "../../logic/proposal", package = "proposal_logic" }
+logic = { path = "../../logic/", package = "logic" }
 
 [[bin]]
 name = "proposal"
