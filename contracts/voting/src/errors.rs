@@ -17,7 +17,8 @@ pub enum Error {
     InvalidArgument1 = 24,             // 65560
     InvalidArgument2 = 25,             // 65561
     UnsupportedNumberOfArguments = 30, // 65566
-    NotTheAdminAccount
+    NotTheAdminAccount,
+    ReputationTransferFail
 }
 
 impl Error {
