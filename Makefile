@@ -7,6 +7,9 @@ build-proposal:
 build-reputation:
 	cargo build --release -p reputation --target wasm32-unknown-unknown
 
+build-voting:
+	cargo build --release -p voting --target wasm32-unknown-unknown
+
 test-only:
 	cargo test -p tests
 
@@ -22,4 +25,4 @@ copy-wasm-file-to-test:
 
 test: build-contract copy-wasm-file-to-test test-only
 
-build: build-proposal build-reputation
+build: build-proposal build-reputation build-voting
