@@ -9,13 +9,12 @@ use alloc::{
     collections::{BTreeMap, BTreeSet},
     string::String,
 };
-use core::convert::TryInto;
-
 use casperlabs_contract_macro::{casperlabs_constructor, casperlabs_contract, casperlabs_method};
 use contract::{
     contract_api::{account, runtime, storage},
     unwrap_or_revert::UnwrapOrRevert,
 };
+use core::convert::TryInto;
 use types::{
     account::{
         AccountHash, ActionType, AddKeyFailure, RemoveKeyFailure, SetThresholdFailure,
@@ -27,15 +26,17 @@ use types::{
     runtime_args, ApiError, CLType, CLTyped, CLValue, Group, Parameter, RuntimeArgs, URef, U256,
 };
 
-use proposal_logic::{Proposal, ProposalError};
+use logic::{Proposal, ProposalError};
 
 const MINIMUM_STABILITY_TIME_KEY: &str = "minimum_stability_time";
 const POLICING_RATIO: &str = "proposal_ratio";
 const REPUTATION_CONTRACT_HASH_KEY: &str = "reputation_contract_hash";
 const PROPOSALS_KEY: &str = "proposals";
+const GOVERNANCE_ADDRESS_KEY: &str = "governance";
 #[casperlabs_contract]
 
 mod ProposawlEngine {
+    use contract::contract_api::runtime::get_key;
     use types::U256;
 
     #[casperlabs_constructor]
@@ -43,10 +44,12 @@ mod ProposawlEngine {
         minimumStabilityTime: U256,
         policing_ratio: u8,
         reputation_contract_hash: ContractHash,
+        governance_address: AccountHash,
     ) {
         set_key(MINIMUM_STABILITY_TIME_KEY, minimumStabilityTime);
         set_key(POLICING_RATIO, policing_ratio);
         set_key(REPUTATION_CONTRACT_HASH_KEY, reputation_contract_hash);
+        set_key(GOVERNANCE_ADDRESS_KEY, governance_address);
     }
     #[casperlabs_method]
     fn name() -> String {
@@ -64,6 +67,12 @@ mod ProposawlEngine {
     }
 
     #[casperlabs_method]
+    fn update_policing_ratio(new_policing_ratio: u8) {
+        assert_caller(get_key(GOVERNANCE_ADDRESS_KEY));
+        set_key(POLICING_RATIO, new_policing_ratio);
+    }
+
+    #[casperlabs_method]
     fn create_proposal(
         name: String,
         storage_pointer: String,
@@ -71,7 +80,7 @@ mod ProposawlEngine {
         category: u8,
         citations: Vec<u64>,
         ratios: Vec<u8>,
-        vote_configuration: ((u64, u64), (u8, u8, u8)),
+        vote_configuration: ((u64, U256), (u8, u64, u8)),
         milestones: Vec<(u8, u8, Vec<(u8, U256, U256)>)>,
         staked_rep: U256,
         sponsors: Vec<(AccountHash, U256)>,
@@ -124,7 +133,6 @@ mod ProposawlEngine {
 }
 
 fn save_proposal(proposal: Proposal) {
-    let mut test: BTreeMap<u64, String> = BTreeMap::new();
     set_key(PROPOSALS_KEY, proposal.serialize());
 }
 
@@ -165,6 +173,13 @@ pub fn assert_admin() {
     let compliance: AccountHash = get_key("_compliance");
     let caller = runtime::get_caller();
     if failsafe != caller || compliance != caller {
+        runtime::revert(Error::NotTheAdminAccount);
+    }
+}
+
+pub fn assert_caller(authorized_account: AccountHash) {
+    let caller = runtime::get_caller();
+    if caller != authorized_account {
         runtime::revert(Error::NotTheAdminAccount);
     }
 }
