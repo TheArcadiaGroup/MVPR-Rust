@@ -3,7 +3,8 @@
 members = [
     "contracts/reputation",
     "contracts/proposal",
-    "logic/proposal",
+    "contracts/voting",
+    "logic/",
 	"tests"
 ]
 
