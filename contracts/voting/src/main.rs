@@ -23,115 +23,51 @@ use types::{
     },
     bytesrepr::{FromBytes, ToBytes},
     contracts::{EntryPoint, EntryPointAccess, EntryPointType, EntryPoints},
-    runtime_args, ApiError, CLType, CLTyped, CLValue, Group, Parameter, RuntimeArgs, URef, U256,
+    runtime_args, ApiError, CLType, CLTyped, CLValue, ContractHash, Group, Parameter, RuntimeArgs,
+    URef, U256,
 };
 mod errors;
 use errors::Error;
+use logic::voting::Voting;
+
 const CURRENT_SUPPLY_KEY: &str = "_currentSupply";
+const REPUTATION_CONTRACT_HASH_KEY: &str = "reputation_contract_hash";
+
 #[casperlabs_contract]
 mod Voting {
 
     #[casperlabs_constructor]
-    fn constructor(
-        tokenName: String,
-        tokenSymbol: String,
-        voting_engine: AccountHash,
-        failsafe: AccountHash,
-        compliance: AccountHash,
-    ) {
-        set_key("_name", tokenName);
-        set_key("_symbol", tokenSymbol);
-        set_key("_granularity", 1);
-        set_key("_currentSupply", 0);
-        set_key("_votingEngine", voting_engine);
-        set_key("_failSafe", failsafe);
-        set_key("_compliance", compliance);
-        set_key(&member_key(&compliance), true);
-        set_key(&member_key(&failsafe), true);
+    fn constructor(reputation_contract_hash: ContractHash) {
+        set_key(REPUTATION_CONTRACT_HASH_KEY, reputation_contract_hash);
     }
 
     #[casperlabs_method]
-    fn name() -> String {
-        get_key("_name")
+    fn calculate_vote_outcome(vote_index: U256) -> u8 {
+        let current_time: u64 = runtime::get_blocktime().into();
+        let vote_serialized = get_key(&voting_key(vote_index));
+        let vote: Voting = Voting::deserialize(vote_serialized);
+        Voting::calculate_vote_outcome(&mut vote, current_time);
+        5 as u8
     }
 
+    // Winning voters call this function to claim their reputation (staked + losers pro-rata)
     #[casperlabs_method]
-    fn symbol() -> String {
-        get_key("_symbol")
-    }
-
-    #[casperlabs_method]
-    fn currentSupply() -> U256 {
-        get_key("_currentSupply")
-    }
-
-    #[casperlabs_method]
-    fn hasLimit() -> bool {
-        false
-    }
-
-    #[casperlabs_method]
-    fn balance_of(account: AccountHash) -> U256 {
-        get_key(&balance_key(&account))
-    }
-
-    #[casperlabs_method]
-    fn transferFrom(from: AccountHash, to: AccountHash, amount: U256) {
-        assert_admin();
-        let mut sender_balance: U256 = get_key(&balance_key(&from));
-        let mut receiver_balance: U256 = get_key(&balance_key(&to));
-        sender_balance = sender_balance - amount;
-        receiver_balance = receiver_balance + amount;
-        set_key(&balance_key(&from), sender_balance);
-        set_key(&balance_key(&to), receiver_balance);
-    }
-    #[casperlabs_method]
-    fn mint(account: AccountHash, weight: Weight) {
-        // assert_admin();
-        // let mut currentSupply: U256 = get_key(CURRENT_SUPPLY_KEY);
-        // currentSupply = currentSupply + amount;
-        // set_key(&CURRENT_SUPPLY_KEY, currentSupply);
-        // let new_balance: U256 = get_key(&balance_key(&account));
-        // set_key(&balance_key(&account), new_balance + amount);
-        match account::update_associated_key(account, weight) {
-            Ok(_) => (),
-            Err(UpdateKeyFailure::MissingKey) => add_key(account, weight),
-            Err(UpdateKeyFailure::PermissionDenied) => runtime::revert(Error::PermissionDenied),
-            Err(UpdateKeyFailure::ThresholdViolation) => runtime::revert(Error::ThresholdViolation),
-        };
-    }
-    fn add_key(key: AccountHash, weight: Weight) -> Result<(), Error> {
-        match account::add_associated_key(key, weight) {
-            Ok(()) => Ok(()),
-            Err(AddKeyFailure::MaxKeysLimit) => runtime::revert(Error::MaxKeysLimit),
-            Err(AddKeyFailure::DuplicateKey) => runtime::revert(Error::DuplicateKey), // Should never happen.
-            Err(AddKeyFailure::PermissionDenied) => runtime::revert(Error::PermissionDenied),
+    fn claim_reputation(vote_index: U256) -> u8 {
+        let current_time: u64 = runtime::get_blocktime().into();
+        let vote_serialized = get_key(&voting_key(vote_index));
+        let mut vote: Voting = Voting::deserialize(vote_serialized);
+        let gained_reputation: U256 =
+            Voting::claim_reputation(&mut vote, runtime::get_caller()).unwrap_or(U256::from(0));
+        if (gained_reputation > U256::from(0)) {
+            let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
+            let mut transfer_args: RuntimeArgs = RuntimeArgs::new();
+            transfer_args.insert("recipient", runtime::get_caller());
+            transfer_args.insert("amount", gained_reputation);
+            let transfer_result =
+                runtime::call_contract(reputation_contract_hash, "transfer", transfer_args);
         }
-    }
-    #[casperlabs_method]
-    fn burn(account: AccountHash, amount: U256) {
-        assert_admin();
-        let mut currentSupply: U256 = get_key(CURRENT_SUPPLY_KEY);
-        currentSupply = currentSupply - amount;
-        set_key(&CURRENT_SUPPLY_KEY, currentSupply);
-        let new_balance: U256 = get_key(&balance_key(&account));
-        set_key(&balance_key(&account), new_balance - amount);
-    }
 
-    #[casperlabs_method]
-    fn is_member(account: AccountHash) -> bool {
-        runtime::has_key(&member_key(&account))
-    }
-
-    #[casperlabs_method]
-    fn add_member(account: AccountHash) {
-        assert_admin();
-        set_key(&member_key(&account), true);
-    }
-    #[casperlabs_method]
-    fn remove_member(account: AccountHash) {
-        assert_admin();
-        runtime::remove_key(&member_key(&account));
+        5 as u8
     }
 }
 
@@ -167,8 +103,8 @@ fn set_key<T: ToBytes + CLTyped>(name: &str, value: T) {
     }
 }
 
-fn balance_key(account: &AccountHash) -> String {
-    format!("_balances_{}", account)
+fn voting_key(index: U256) -> String {
+    format!("_votes_{}", index)
 }
 
 fn member_key(account: &AccountHash) -> String {
