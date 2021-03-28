@@ -75,6 +75,19 @@ mod Reputation {
     fn balance_of(account: AccountHash) -> U256 {
         get_key(&balance_key(&account))
     }
+    #[casperlabs_method]
+    fn transfer(recipient: AccountHash, amount: U256) {
+        _transfer(runtime::get_caller(), recipient, amount);
+    }
+
+    fn _transfer(sender: AccountHash, recipient: AccountHash, amount: U256) {
+        let sender_key = balance_key(&sender);
+        let recipient_key = balance_key(&recipient);
+        let new_sender_balance: U256 = (get_key::<U256>(&sender_key) - amount);
+        set_key(&sender_key, new_sender_balance);
+        let new_recipient_balance: U256 = (get_key::<U256>(&recipient_key) + amount);
+        set_key(&recipient_key, new_recipient_balance);
+    }
 
     #[casperlabs_method]
     fn transferFrom(from: AccountHash, to: AccountHash, amount: U256) {
