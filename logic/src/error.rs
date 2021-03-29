@@ -3,8 +3,6 @@ pub struct StartNotBeforeEnd;
 
 #[derive(PartialEq, Debug)]
 pub enum VotingEngineError {
-    NotEnoughVotingPower,
-    NotAParticipant,
     VotingNotStarted,
     VotingEnded,
     VotingOngoing,
@@ -13,6 +11,9 @@ pub enum VotingEngineError {
     NoReputationToClaim,
     VoteIsNotApproved,
     VoteDidNotFail,
+    VoteFailed,
+    InvalidReputationToStake,
+    StakingLimitReached
 }
 #[derive(PartialEq, Debug)]
 pub enum ProposalError {
