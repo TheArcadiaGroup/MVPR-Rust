@@ -36,7 +36,7 @@ pub struct VoteConfiguration {
     pub threshold: u8,
     // How long does the vote remain active
     pub timeout: u64,
-    pub voter_staking_limits: u8,
+    pub voter_staking_limits: U256,
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Proposal {
@@ -109,7 +109,7 @@ type SponsorsSerialized = BTreeMap<[u8; 32], U256>;
 type FundingTrancheSerialized = (u8, U256, U256);
 
 type RatiosSerialized = ([u8; 3]);
-type VoteConfigurationSerialized = ((u64, U256), (u8, u64, u8));
+type VoteConfigurationSerialized = ((u64, U256), (u8, u64, U256));
 
 impl Proposal {
     pub fn new(
@@ -184,7 +184,7 @@ impl Proposal {
         let reputation_quorum: U256 = vote_configuration.0 .1;
         let threshold: u8 = vote_configuration.1 .0;
         let timeout: u64 = vote_configuration.1 .1;
-        let voter_staking_limits: u8 = vote_configuration.1 .2;
+        let voter_staking_limits: U256 = vote_configuration.1 .2;
         Ok(Proposal {
             name: name,
             storageFingerprint: storage_fingerprint,
@@ -205,7 +205,7 @@ impl Proposal {
                 op_ratio: ratios.get(1).unwrap().clone(),
                 citation_ratio: ratios.get(2).unwrap().clone(),
             },
-            proposal_status: ProposalStatus::WaitingFullVote,
+            proposal_status: ProposalStatus::InFullVote,
             sponsors: sponsors_mapping,
             cost,
         })
