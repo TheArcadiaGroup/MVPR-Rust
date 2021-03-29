@@ -32,7 +32,7 @@ pub enum Error {
     VoteFailed,
     NotAMember,
     InvalidReputationToStake,
-    InvalidReputationToStake,
+    StakingLimitReached,
 }
 
 impl Error {
