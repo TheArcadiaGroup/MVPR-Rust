@@ -1,3 +1,4 @@
+use logic::VotingEngineError;
 use types::ApiError;
 
 #[repr(u16)]
@@ -18,7 +19,20 @@ pub enum Error {
     InvalidArgument2 = 25,             // 65561
     UnsupportedNumberOfArguments = 30, // 65566
     NotTheAdminAccount,
-    ReputationTransferFail
+    ReputationTransferFail,
+    VoteDoesNotExist,
+    VotingNotStarted,
+    VotingEnded,
+    VotingOngoing,
+    VotingNotOngoing,
+    ReputationAlreadyClaimed,
+    NoReputationToClaim,
+    VoteIsNotApproved,
+    VoteDidNotFail,
+    VoteFailed,
+    NotAMember,
+    InvalidReputationToStake,
+    InvalidReputationToStake,
 }
 
 impl Error {
@@ -44,5 +58,23 @@ impl Error {
 impl From<Error> for ApiError {
     fn from(error: Error) -> ApiError {
         ApiError::User(error as u16)
+    }
+}
+
+impl From<VotingEngineError> for Error {
+    fn from(error: VotingEngineError) -> Error {
+        match error {
+            VotingEngineError::VotingNotStarted => Error::VotingNotStarted,
+            VotingEngineError::VotingEnded => Error::VotingEnded,
+            VotingEngineError::VotingOngoing => Error::VotingOngoing,
+            VotingEngineError::ReputationAlreadyClaimed => Error::ReputationAlreadyClaimed,
+            VotingEngineError::NoReputationToClaim => Error::NoReputationToClaim,
+            VotingEngineError::VoteIsNotApproved => Error::VoteIsNotApproved,
+            VotingEngineError::VoteDidNotFail => Error::VoteDidNotFail,
+            VotingEngineError::VoteFailed => Error::VoteFailed,
+            VotingEngineError::VotingNotOngoing => Error::VoteFailed,
+            VotingEngineError::InvalidReputationToStake => Error::InvalidReputationToStake,
+            VotingEngineError::StakingLimitReached => Error::StakingLimitReached,
+        }
     }
 }
