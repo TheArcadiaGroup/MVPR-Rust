@@ -42,15 +42,11 @@ pub enum VoteResult {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Voting {
     pub start_timestamp: u64,
-    pub end_timestamp: u64,
     pub proposal: Proposal,
-    pub for_votes: u64,
-    pub against_votes: u64,
-    pub voters: Vec<AccountHash>,
+    pub for_votes: U256,
+    pub against_votes: U256,
     pub for_voters: BTreeMap<AccountHash, VotingData>,
     pub against_voters: BTreeMap<AccountHash, VotingData>,
-    pub staked_for: U256,
-    pub staked_against: U256,
     pub total_staked_reputation: U256,
     pub total_members: u64,
     pub result: VoteResult,
@@ -71,33 +67,31 @@ type VotingSerialized = (
 );
 
 impl Voting {
-    // pub fn new(
-    //     start_timestamp: u64,
-    //     end_timestamp: u64,
-    //     serialized_proposal: ProposalSerialized,
-    // ) -> Result<Voting, StartNotBeforeEnd> {
-    //     Self::validate_dates(start_timestamp, end_timestamp)?;
-    //     Ok(Voting {
-    //         start_timestamp,
-    //         end_timestamp,
-    //         against_voters: BTreeMap::new(),
-    //         for_voters: BTreeMap::new(),
-    //         against_votes: 0,
-    //         for_votes: 0,
-    //         total_members: U256::from(0),
-    //         total_staked_reputation: U256::from(0),
-    //         voters: Vec::new(),
-    //         result: VoteResult::InVote,
-    //         proposal: Proposal::deserialize(serialized_proposal),
-    //     })
-    // }
+    pub fn new(
+        start_timestamp: u64,
+        end_timestamp: u64,
+        serialized_proposal: ProposalSerialized,
+    ) -> Result<Voting, StartNotBeforeEnd> {
+        Ok(Voting {
+            start_timestamp,
+            against_voters: BTreeMap::new(),
+            for_voters: BTreeMap::new(),
+            against_votes: U256::from(0),
+            for_votes: U256::from(0),
+            total_members: 0 as u64,
+            total_staked_reputation: U256::from(0),
+            result: VoteResult::InVote,
+            proposal: Proposal::deserialize(serialized_proposal),
+            input_reputation: U256::from(0),
+        })
+    }
 
     pub fn start_at(&self) -> u64 {
         self.start_timestamp
     }
 
     pub fn end_at(&self) -> u64 {
-        self.end_timestamp
+        self.proposal.vote_configuration.timeout
     }
 
     pub fn calculate_vote_outcome(
@@ -122,7 +116,7 @@ impl Voting {
         }
         let total_votes = self.for_votes + self.against_votes;
         if self.for_votes > self.against_votes {
-            let percentage: u64 = (self.for_votes * 10000) / (100 * (total_votes));
+            let percentage: U256 = (self.for_votes * 10000) / (U256::from(100) * (total_votes));
             if percentage <= self.proposal.vote_configuration.threshold.into() {
                 return Ok(VoteResult::PassThresholdUnmet);
             } else {
@@ -135,7 +129,7 @@ impl Voting {
                 return Ok(VoteResult::Approved);
             }
         } else if self.against_votes >= self.for_votes {
-            let percentage: u64 = (self.against_votes * 10000) / (100 * (total_votes));
+            let percentage: U256 = (self.against_votes * 10000) / (U256::from(100) * (total_votes));
             if percentage <= self.proposal.vote_configuration.threshold.into() {
                 return Ok(VoteResult::FailThresholdUnmet);
             } else {
@@ -145,53 +139,61 @@ impl Voting {
         Ok(VoteResult::Approved)
     }
 
-    pub fn claim_reputation(
-        &mut self,
-        caller: AccountHash,
-        reputation_allocation_ratio: U256,
-    ) -> Result<U256, VotingEngineError> {
+    pub fn claim_reputation(&mut self, caller: AccountHash) -> Result<U256, VotingEngineError> {
         if self.result != VoteResult::Approved || self.result != VoteResult::Rejected {
-            return Err(VotingEngineError::Vote);
+            return Err(VotingEngineError::VoteFailed);
         }
-        let caller_voting_data = self.for_voters.get_mut(&caller);
+        let is_for_voter = self.for_voters.contains_key(&caller);
+        let is_against_voter = self.against_voters.contains_key(&caller);
+        let mut caller_voting_data: Option<&mut VotingData> = None;
+        if is_against_voter {
+            caller_voting_data = self.against_voters.get_mut(&caller);
+        } else if is_for_voter {
+            caller_voting_data = self.for_voters.get_mut(&caller);
+        }
         match caller_voting_data {
             Some(voting_data) => {
                 if voting_data.claimed {
                     return Err(VotingEngineError::ReputationAlreadyClaimed);
                 }
-                let similar_votes = self.for_votes;
-                let opposite_votes = self.against_votes;
-                if (self.result == VoteResult::Rejected) {
+                voting_data.claimed = true;
+                let mut similar_votes = self.for_votes;
+                let mut opposite_votes = self.against_votes;
+                let vote_rejected: bool = self.result == VoteResult::Rejected;
+                if vote_rejected {
                     similar_votes = self.against_votes;
                     opposite_votes = self.for_votes;
                 }
-                let voter_shares = (voting_data.reputation_staked * 1000) / (10 * (similar_votes));
-                let rep_gained: U256 = (voter_shares * (opposite_votes)) / 100;
-                let nominator = self.input_reputation;
-                if (caller == self.proposal.proposer) {
-                    // Give OP 1-Policing Ratio rep
+                let voter_shares =
+                    (voting_data.reputation_staked * 1000) / (U256::from(10) * (similar_votes));
+                let mut rep_gained: U256 = (voter_shares * (opposite_votes)) / 100;
+                if !vote_rejected {
+                    // If vote was approved, distribute input reputation
+                    let nominator = self.input_reputation;
+                    if caller == self.proposal.proposer {
+                        // Give OP 1-Policing Ratio rep
 
-                    // Op ratio = 1-Policing Ratio
-                    let op_ratio =
-                        U256::from(10000) - U256::from(self.proposal.ratios.policing_ratio * 100);
-                    let denominator: U256 =
-                        (U256::from(10).pow(U256::from(12))) / (U256::from(10000) / op_ratio);
-                    rep_gained += nominator / denominator;
-                } else {
-                    // NOT OP, gets pro rata policing ratio
-                    let denominator: U256 = (U256::from(10).pow(U256::from(12)))
-                        / (U256::from(10000) / self.proposal.ratios.policing_ratio * 100);
-                    rep_gained =
-                        (nominator / denominator) / (U256::from(10000) / (voter_shares * 100));
+                        // Op ratio = 1-Policing Ratio
+                        let op_ratio = U256::from(10000)
+                            - U256::from(self.proposal.ratios.policing_ratio * 100);
+                        let denominator: U256 =
+                            (U256::from(10).pow(U256::from(12))) / (U256::from(10000) / op_ratio);
+                        rep_gained += nominator / denominator;
+                    } else {
+                        // NOT OP, gets pro rata policing ratio
+                        let denominator: U256 = (U256::from(10).pow(U256::from(12)))
+                            / (U256::from(10000) / self.proposal.ratios.policing_ratio * 100);
+                        rep_gained =
+                            (nominator / denominator) / (U256::from(10000) / (voter_shares * 100));
+                    }
                 }
-                voting_data.claimed = true;
                 Ok(rep_gained + voting_data.reputation_staked)
             }
             None => Err(VotingEngineError::NoReputationToClaim),
         }
     }
 
-    // If vote criteria unmet, users call this function to get their stakes back
+    // If vote fails, users call this function to get their stakes back
     pub fn get_stake(&mut self, caller: AccountHash) -> Result<U256, VotingEngineError> {
         if self.result != VoteResult::FailCriteriaUnmet
             || self.result != VoteResult::MemberQuorumUnmet
@@ -200,7 +202,14 @@ impl Voting {
         {
             return Err(VotingEngineError::VoteDidNotFail);
         }
-        let caller_voting_data = self.for_voters.get_mut(&caller);
+        let is_for_voter = self.for_voters.contains_key(&caller);
+        let is_against_voter = self.against_voters.contains_key(&caller);
+        let mut caller_voting_data: Option<&mut VotingData> = None;
+        if is_against_voter {
+            caller_voting_data = self.against_voters.get_mut(&caller);
+        } else if is_for_voter {
+            caller_voting_data = self.for_voters.get_mut(&caller);
+        }
         match caller_voting_data {
             Some(voting_data) => {
                 if voting_data.claimed {
@@ -211,6 +220,49 @@ impl Voting {
             }
             None => Err(VotingEngineError::NoReputationToClaim),
         }
+    }
+
+    pub fn cast_vote(
+        &mut self,
+        caller: AccountHash,
+        current_time: u64,
+        reputation_balance: U256,
+        reputation_to_stake: U256,
+        committed_reputation: U256,
+        vote_direction: bool,
+    ) -> Result<(), VotingEngineError> {
+        if current_time > self.proposal.vote_configuration.timeout {
+            return Err(VotingEngineError::VotingEnded);
+        }
+        if self.proposal.proposal_status != ProposalStatus::InFullVote {
+            return Err(VotingEngineError::VotingNotOngoing);
+        }
+        if reputation_to_stake > reputation_balance - committed_reputation {
+            return Err(VotingEngineError::InvalidReputationToStake);
+        }
+        let voter_staking_limit: U256 = self.proposal.vote_configuration.voter_staking_limits;
+        let staking_percentage: U256 = reputation_balance / reputation_balance;
+        if staking_percentage > voter_staking_limit {
+            return Err(VotingEngineError::StakingLimitReached);
+        }
+        let voting_data: VotingData = VotingData {
+            claimed: false,
+            reputation_staked: reputation_to_stake,
+            vote: vote_direction,
+        };
+        if vote_direction {
+            self.for_voters.insert(caller, voting_data);
+            self.for_votes += reputation_to_stake;
+        } else {
+            self.against_voters.insert(caller, voting_data);
+            self.against_votes += reputation_to_stake;
+        }
+        if !self.for_voters.contains_key(&caller) && !self.against_voters.contains_key(&caller) {
+            // First time voting on this proposal
+            self.total_members += 1;
+        }
+        self.total_staked_reputation += reputation_to_stake;
+        Ok(())
     }
 
     //     fn validate_dates(start_timestamp: u64, end_timestamp: u64) -> Result<(), StartNotBeforeEnd> {
