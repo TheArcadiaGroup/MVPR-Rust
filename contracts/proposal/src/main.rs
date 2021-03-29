@@ -80,7 +80,7 @@ mod ProposawlEngine {
         category: u8,
         citations: Vec<u64>,
         ratios: Vec<u8>,
-        vote_configuration: ((u64, U256), (u8, u64, u8)),
+        vote_configuration: ((u64, U256), (u8, u64, U256)),
         milestones: Vec<(u8, u8, Vec<(u8, U256, U256)>)>,
         staked_rep: U256,
         sponsors: Vec<(AccountHash, U256)>,
@@ -125,10 +125,7 @@ mod ProposawlEngine {
         .map(save_proposal)
         .map_err(|e| runtime::revert(Error::from(e)))
         .unwrap();
-        // Voting::new(start_at, end_at)
-        //     .map(save_voting)
-        //     .map_err(|e| runtime::revert(Error::from(e)))
-        //     .unwrap()
+        
     }
 }
 
