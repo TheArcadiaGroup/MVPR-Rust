@@ -26,30 +26,38 @@ use types::{
     runtime_args, ApiError, CLType, CLTyped, CLValue, Group, Parameter, RuntimeArgs, URef, U256,
 };
 
-use logic::{Proposal, ProposalError};
+use logic::{
+    custom_types::custom_types::GovernanceVoteConfigurationSerialized, voting::Voting,
+    GovernanceProposal, Proposal, ProposalError, VotingEngineError,
+};
 
 const MINIMUM_STABILITY_TIME_KEY: &str = "minimum_stability_time";
-const POLICING_RATIO: &str = "proposal_ratio";
+const POLICING_RATIO: &str = "policing_ratio";
 const REPUTATION_CONTRACT_HASH_KEY: &str = "reputation_contract_hash";
-const PROPOSALS_KEY: &str = "proposals";
 const GOVERNANCE_ADDRESS_KEY: &str = "governance";
+const VOTING_CONTRACT_HASH_KEY: &str = "voting_contract_hash";
+const VOTING_CONTRACT_ADDRESS_KEY: &str = "voting_contract_address";
+const DEPLOYER_ADDRESS_KEY: &str = "deployer_address";
+const VOTING_CONTRACT_CHANGED_KEY: &str = "voting_contract_changed";
+const NUMBER_OF_GOVERNANCE_PROPOSALS_KEY: &str = "governance_proposals_number";
+const NUMBER_OF_PROPOSALS_KEY: &str = "proposals_number";
 #[casperlabs_contract]
 
 mod ProposawlEngine {
-    use contract::contract_api::runtime::get_key;
-    use types::U256;
 
     #[casperlabs_constructor]
     fn constructor(
-        minimumStabilityTime: U256,
+        minimum_stability_time: U256,
         policing_ratio: u8,
         reputation_contract_hash: ContractHash,
         governance_address: AccountHash,
     ) {
-        set_key(MINIMUM_STABILITY_TIME_KEY, minimumStabilityTime);
+        set_key(MINIMUM_STABILITY_TIME_KEY, minimum_stability_time);
         set_key(POLICING_RATIO, policing_ratio);
         set_key(REPUTATION_CONTRACT_HASH_KEY, reputation_contract_hash);
         set_key(GOVERNANCE_ADDRESS_KEY, governance_address);
+        set_key(DEPLOYER_ADDRESS_KEY, runtime::get_caller());
+        set_key(VOTING_CONTRACT_CHANGED_KEY, false);
     }
     #[casperlabs_method]
     fn name() -> String {
@@ -73,6 +81,24 @@ mod ProposawlEngine {
     }
 
     #[casperlabs_method]
+    fn update_voting_contract_info(
+        new_voting_contract_address: AccountHash,
+        new_voting_contract_hash: ContractHash,
+    ) {
+        let deployer_address: AccountHash = get_key(DEPLOYER_ADDRESS_KEY);
+        let voting_contact_changed: bool = get_key(VOTING_CONTRACT_CHANGED_KEY);
+        // Deployer can only set the voting contract once after deployment.
+        if voting_contact_changed {
+            assert_caller(get_key(VOTING_CONTRACT_ADDRESS_KEY));
+        } else {
+            assert_caller(get_key(DEPLOYER_ADDRESS_KEY));
+            set_key(VOTING_CONTRACT_CHANGED_KEY, true);
+        }
+        set_key(VOTING_CONTRACT_ADDRESS_KEY, new_voting_contract_address);
+        set_key(VOTING_CONTRACT_HASH_KEY, new_voting_contract_hash);
+    }
+
+    #[casperlabs_method]
     fn create_proposal(
         name: String,
         storage_pointer: String,
@@ -88,7 +114,10 @@ mod ProposawlEngine {
     ) {
         let caller = runtime::get_caller();
         let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
-
+        let voting_contract_changed: bool = get_key(VOTING_CONTRACT_CHANGED_KEY);
+        if !voting_contract_changed {
+            runtime::revert(Error::InvalidVotingContractAddress);
+        }
         let mut is_member_args: RuntimeArgs = RuntimeArgs::new();
         is_member_args.insert("account", runtime::get_caller());
 
@@ -106,7 +135,7 @@ mod ProposawlEngine {
         // TO DO: Use Oracles to get $100 Equivalent
         let system_policing_ratio: u8 = get_key(POLICING_RATIO);
 
-        Proposal::new(
+        let proposal: Proposal = Proposal::new(
             name,
             storage_pointer,
             storage_fingerprint,
@@ -122,19 +151,118 @@ mod ProposawlEngine {
             sponsors,
             cost,
         )
-        .map(save_proposal)
         .map_err(|e| runtime::revert(Error::from(e)))
         .unwrap();
-        
+        let new_proposal_index: U256 = get_key(NUMBER_OF_PROPOSALS_KEY);
+
+        save_proposal(new_proposal_index, proposal.clone());
+
+        // Send staked rep to voting engine
+        let voting_contract_address: ContractHash = get_key(VOTING_CONTRACT_ADDRESS_KEY);
+        let mut transfer_args: RuntimeArgs = RuntimeArgs::new();
+        transfer_args.insert("from", runtime::get_caller());
+        transfer_args.insert("to", voting_contract_address);
+        transfer_args.insert("amount", staked_rep);
+        // Create new vote in voting engine
+        let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
+        runtime::call_contract::<bool>(reputation_contract_hash, "transferFrom", transfer_args);
+        let mut new_vote_args: RuntimeArgs = RuntimeArgs::new();
+        new_vote_args.insert("proposal", Proposal::serialize(&proposal));
+        let voting_contract_hash: ContractHash = get_key(VOTING_CONTRACT_HASH_KEY);
+        runtime::call_contract::<bool>(voting_contract_hash, "new_vote", new_vote_args);
+    }
+
+    #[casperlabs_method]
+    fn create_governance_proposal(
+        name: String,
+        vote_configuration: GovernanceVoteConfigurationSerialized,
+        staked_rep: U256,
+        sponsors: Vec<(AccountHash, U256)>,
+        repository_url: String,
+        new_variable_key_value: (String, String),
+    ) {
+        let caller = runtime::get_caller();
+        let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
+        let voting_contract_changed: bool = get_key(VOTING_CONTRACT_CHANGED_KEY);
+        if !voting_contract_changed {
+            runtime::revert(Error::InvalidVotingContractAddress);
+        }
+        let mut is_member_args: RuntimeArgs = RuntimeArgs::new();
+        is_member_args.insert("account", runtime::get_caller());
+
+        let is_member: bool =
+            runtime::call_contract::<bool>(reputation_contract_hash, "is_member", is_member_args);
+        if (!is_member) {
+            runtime::revert(Error::NotAMember);
+        }
+
+        let mut balance_of_args: RuntimeArgs = RuntimeArgs::new();
+        balance_of_args.insert("account", runtime::get_caller());
+        let reputation_balance: U256 =
+            runtime::call_contract::<U256>(reputation_contract_hash, "balanceOf", balance_of_args);
+
+        // TO DO: Use Oracles to get $100 Equivalent
+        let system_policing_ratio: u8 = get_key(POLICING_RATIO);
+
+        let governance_proposal: GovernanceProposal = GovernanceProposal::new(
+            name,
+            vote_configuration,
+            staked_rep,
+            caller,
+            reputation_balance,
+            sponsors,
+            repository_url,
+            new_variable_key_value,
+        )
+        .map_err(|e| runtime::revert(Error::from(e)))
+        .unwrap();
+        let new_governance_proposal_index: U256 = get_key(NUMBER_OF_GOVERNANCE_PROPOSALS_KEY);
+
+        save_governance_proposal(new_governance_proposal_index, governance_proposal.clone());
+
+        // Send staked rep to voting engine
+        let voting_contract_address: ContractHash = get_key(VOTING_CONTRACT_ADDRESS_KEY);
+        let mut transfer_args: RuntimeArgs = RuntimeArgs::new();
+        transfer_args.insert("from", runtime::get_caller());
+        transfer_args.insert("to", voting_contract_address);
+        transfer_args.insert("amount", staked_rep);
+        // Create new vote in voting engine
+        let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
+        runtime::call_contract::<bool>(reputation_contract_hash, "transferFrom", transfer_args);
+        let mut new_vote_args: RuntimeArgs = RuntimeArgs::new();
+        new_vote_args.insert(
+            "proposal",
+            GovernanceProposal::serialize(&governance_proposal),
+        );
+        let voting_contract_hash: ContractHash = get_key(VOTING_CONTRACT_HASH_KEY);
+        runtime::call_contract::<bool>(voting_contract_hash, "new_governance_vote", new_vote_args);
     }
 }
 
-fn save_proposal(proposal: Proposal) {
-    set_key(PROPOSALS_KEY, proposal.serialize());
+fn save_proposal(proposal_index: U256, proposal: Proposal) {
+    set_key(&proposal_key(proposal_index), proposal.serialize());
 }
 
-fn read_voting() -> Proposal {
-    let serialized = get_key(PROPOSALS_KEY);
+fn save_governance_proposal(governance_proposal_index: U256, proposal: GovernanceProposal) {
+    set_key(
+        &governance_proposal_key(governance_proposal_index),
+        proposal.serialize(),
+    );
+}
+
+fn governance_proposal_key(index: U256) -> String {
+    format!("_governance_proposals_{}", index)
+}
+fn proposal_key(index: U256) -> String {
+    format!("_proposals_{}", index)
+}
+
+fn read_proposal(proposal_index: U256) -> Proposal {
+    let serialized = get_key(&proposal_key(proposal_index));
+    Proposal::deserialize(serialized)
+}
+fn read_governance_proposal(proposal_index: U256) -> Proposal {
+    let serialized = get_key(&governance_proposal_key(proposal_index));
     Proposal::deserialize(serialized)
 }
 #[repr(u16)]
@@ -146,6 +274,7 @@ pub enum Error {
     InvalidMilestonesProgressPercentages,
     ProjectCostNotEqualToMilestonesSum,
     StakedRepGreaterThanReputationBalance,
+    InvalidVotingContractAddress,
 }
 #[repr(u16)]
 pub enum ProposalStatus {

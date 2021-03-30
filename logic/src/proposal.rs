@@ -39,10 +39,19 @@ pub struct VoteConfiguration {
     pub voter_staking_limits: U256,
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct GovernanceVoteConfiguration {
+    pub transition_vote_quorum: U256,
+    pub transition_vote_threshold: u64,
+    pub proposal_repository_address: String,
+    pub full_vote_quorum: U256,
+    pub full_vote_threshold: u64,
+    pub timeout: u64,
+}
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Proposal {
     pub name: String,
-    pub storagePointer: String,
-    pub storageFingerprint: String,
+    pub storage_pointer: String,
+    pub storage_fingerprint: String,
     pub proposal_type: ProposalType,
     pub proposer: AccountHash,
     pub citations: Vec<u64>,
@@ -53,12 +62,21 @@ pub struct Proposal {
     pub sponsors: BTreeMap<AccountHash, U256>,
     pub cost: U256,
 }
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct GovernanceProposal {
+    pub name: String,
+    pub repository_url: String,
+    pub proposer: AccountHash,
+    pub sponsors: BTreeMap<AccountHash, U256>,
+    pub proposal_type: ProposalType,
+    pub vote_configuration: GovernanceVoteConfiguration,
+    pub proposal_status: ProposalStatus,
+    pub new_variable_key_value: (String, String),
+}
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum ProposalType {
-    Signaling,
     Grant,
-    Internal,
-    External,
+    Governance,
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum ProposalStatus {
@@ -110,6 +128,37 @@ type FundingTrancheSerialized = (u8, U256, U256);
 
 type RatiosSerialized = ([u8; 3]);
 type VoteConfigurationSerialized = ((u64, U256), (u8, u64, U256));
+// pub name: String,
+//     pub repository_url: String,
+//     pub proposer: AccountHash,
+//     pub sponsors: BTreeMap<AccountHash, U256>,
+//     pub proposal_type: ProposalType,
+//     pub vote_configuration: GovernanceVoteConfiguration,
+//     pub proposal_status: ProposalStatus,
+//     pub new_variable_key_value: (String, String),
+type GovernanceProposalSerialized = (
+    // 0
+    // name, storage_pointer, storage_fingerprint
+    (String, String, [u8; 32]), // 0.0 // name, repo url, proposer
+    (
+        // 0.1
+        // sponsors
+        SponsorsSerialized,
+        // proposal type
+        u8,
+        // vote config
+        GovernanceVoteConfigurationSerialized,
+    ),
+    (
+        // 0.2
+        // proposal status
+        u8,
+        // new_variable_key_value
+        (String, String),
+    ),
+);
+
+type GovernanceVoteConfigurationSerialized = ((U256, u64, String), (U256, u64, u64));
 
 impl Proposal {
     pub fn new(
@@ -134,16 +183,16 @@ impl Proposal {
             return Err(ProposalError::InvalidPolicingRatio);
         }
         // let op_ratio : u8 = 100-(proposal_policing_ratio+);
-        if (category > 1) {
-            return (Err(ProposalError::InvalidCategory));
+        if category > 1 {
+            return Err(ProposalError::InvalidCategory);
         }
 
-        if (staked_rep > reputation_balance) {
-            return (Err(ProposalError::StakedRepGreaterThanReputationBalance));
+        if staked_rep > reputation_balance {
+            return Err(ProposalError::StakedRepGreaterThanReputationBalance);
         }
         let mut new_category: ProposalType = ProposalType::Grant;
-        if (category == 1) {
-            new_category = ProposalType::Signaling;
+        if category == 1 {
+            new_category = ProposalType::Grant;
         }
 
         // pub milestones: BTreeMap<u64, Milestone>
@@ -187,8 +236,8 @@ impl Proposal {
         let voter_staking_limits: U256 = vote_configuration.1 .2;
         Ok(Proposal {
             name: name,
-            storageFingerprint: storage_fingerprint,
-            storagePointer: storage_pointer,
+            storage_fingerprint: storage_fingerprint,
+            storage_pointer: storage_pointer,
             vote_configuration: VoteConfiguration {
                 member_quorum,
                 reputation_quorum,
@@ -238,8 +287,8 @@ impl Proposal {
             (
                 (
                     self.name.clone(),
-                    self.storagePointer.clone(),
-                    self.storageFingerprint.clone(),
+                    self.storage_pointer.clone(),
+                    self.storage_fingerprint.clone(),
                 ),
                 (
                     self.proposal_type as u8,
@@ -329,13 +378,13 @@ impl Proposal {
     }
     pub fn deserialize(serialized_proposal: ProposalSerialized) -> Proposal {
         let mut proposal_type: ProposalType = ProposalType::Grant;
-        if (serialized_proposal.0 .1 .0 == 1) {
-            proposal_type = ProposalType::Signaling;
+        if serialized_proposal.0 .1 .0 == 1 {
+            proposal_type = ProposalType::Grant;
         }
         Proposal {
             name: serialized_proposal.0 .0 .0,
-            storagePointer: serialized_proposal.0 .0 .1,
-            storageFingerprint: serialized_proposal.0 .0 .2,
+            storage_pointer: serialized_proposal.0 .0 .1,
+            storage_fingerprint: serialized_proposal.0 .0 .2,
             proposal_type: proposal_type,
             proposer: AccountHash::new(serialized_proposal.0 .1 .1),
             citations: serialized_proposal.0 .1 .2,
@@ -392,6 +441,165 @@ impl Proposal {
         }
         deserialized_tranches
     }
+    fn deserialize_sponsors(
+        serialized_sponsors: BTreeMap<[u8; 32], U256>,
+    ) -> BTreeMap<AccountHash, U256> {
+        let mut deserialized_sponsors: BTreeMap<AccountHash, U256> = BTreeMap::new();
+        for (key, commitment) in serialized_sponsors {
+            deserialized_sponsors.insert(AccountHash::new(key), commitment);
+        }
+        deserialized_sponsors
+    }
+}
+impl GovernanceProposal {
+    pub fn new(
+        name: String,
+        vote_configuration: GovernanceVoteConfigurationSerialized,
+        staked_rep: U256,
+        proposer: AccountHash,
+        reputation_balance: U256,
+        sponsors: Vec<(AccountHash, U256)>,
+        repository_url: String,
+        new_variable_key_value: (String, String),
+    ) -> Result<GovernanceProposal, ProposalError> {
+        if staked_rep > reputation_balance {
+            return Err(ProposalError::StakedRepGreaterThanReputationBalance);
+        }
+        let proposal_type: ProposalType = ProposalType::Governance;
+
+        let mut sponsors_mapping: BTreeMap<AccountHash, U256> = BTreeMap::new();
+        for sponsor in sponsors {
+            sponsors_mapping.insert(sponsor.0, sponsor.1);
+        }
+        Ok(GovernanceProposal {
+            name,
+            vote_configuration: GovernanceVoteConfiguration {
+                transition_vote_quorum: vote_configuration.0 .0,
+                transition_vote_threshold: vote_configuration.0 .1,
+                proposal_repository_address: vote_configuration.0 .2,
+                full_vote_quorum: vote_configuration.1 .0,
+                full_vote_threshold: vote_configuration.1 .1,
+                timeout: vote_configuration.1 .2,
+            },
+            proposal_type,
+            proposer,
+            proposal_status: ProposalStatus::InFullVote,
+            sponsors: sponsors_mapping,
+            repository_url,
+            new_variable_key_value,
+        })
+    }
+
+    pub fn serialize(&self) -> GovernanceProposalSerialized {
+        // type GovernanceProposalSerialized = (
+        //     // 0
+        //     // name, storage_pointer, storage_fingerprint
+        //     (String, String, [u8; 32]), // 0.0 // name, repo url, proposer
+        //     (
+        //         // 0.1
+        //         // sponsors
+        //         SponsorsSerialized,
+        //         // proposal type
+        //         u8,
+        //         // vote config
+        //         GovernanceVoteConfigurationSerialized,
+        //     ),
+        //     (
+        //         // 0.2
+        //         // proposal status
+        //         u8,
+        //         // new_variable_key_value
+        //         (String, String),
+        //     ),
+        // );
+        (
+            (
+                self.name.clone(),
+                self.repository_url.clone(),
+                self.proposer.value(),
+            ),
+            (
+                self.serialize_sponsors(),
+                self.proposal_type as u8,
+                self.serialize_vote_configuration(),
+            ),
+            (
+                self.proposal_status as u8,
+                (
+                    self.new_variable_key_value.0.clone(),
+                    self.new_variable_key_value.1.clone(),
+                ),
+            ),
+        )
+    }
+
+    fn serialize_vote_configuration(&self) -> GovernanceVoteConfigurationSerialized {
+        (
+            (
+                self.vote_configuration.transition_vote_quorum,
+                self.vote_configuration.transition_vote_threshold,
+                self.vote_configuration.proposal_repository_address.clone(),
+            ),
+            (
+                self.vote_configuration.full_vote_quorum,
+                self.vote_configuration.full_vote_threshold,
+                self.vote_configuration.timeout,
+            ),
+        )
+    }
+
+    fn serialize_sponsors(&self) -> SponsorsSerialized {
+        type SponsorsSerialized = BTreeMap<[u8; 32], U256>;
+
+        let mut output: SponsorsSerialized = BTreeMap::new();
+        for (key, sponsor) in self.sponsors.iter() {
+            output.insert(key.value(), sponsor.clone());
+        }
+        output
+    }
+    pub fn deserialize(
+        serialized_governance_proposal: GovernanceProposalSerialized,
+    ) -> GovernanceProposal {
+        // type GovernanceProposalSerialized = (
+        //     // 0
+        //     // name, storage_pointer, storage_fingerprint
+        //     (String, String, [u8; 32]), // 0.0 // name, repo url, proposer
+        //     (
+        //         // 0.1
+        //         // sponsors
+        //         SponsorsSerialized,
+        //         // proposal type
+        //         u8,
+        //         // vote config
+        //         GovernanceVoteConfigurationSerialized,
+        //     ),
+        //     (
+        //         // 0.2
+        //         // proposal status
+        //         u8,
+        //         // new_variable_key_value
+        //         (String, String),
+        //     ),
+        // );
+        GovernanceProposal {
+            name: serialized_governance_proposal.0 .0,
+            repository_url: serialized_governance_proposal.0 .1,
+            proposer: AccountHash::new(serialized_governance_proposal.0 .2),
+            sponsors: GovernanceProposal::deserialize_sponsors(serialized_governance_proposal.1 .0),
+            proposal_type: ProposalType::Governance,
+            vote_configuration: GovernanceVoteConfiguration {
+                transition_vote_quorum: serialized_governance_proposal.1 .2 .0 .0,
+                transition_vote_threshold: serialized_governance_proposal.1 .2 .0 .1,
+                proposal_repository_address: serialized_governance_proposal.1 .2 .0 .2,
+                full_vote_quorum: serialized_governance_proposal.1 .2 .1 .0,
+                full_vote_threshold: serialized_governance_proposal.1 .2 .1 .1,
+                timeout: serialized_governance_proposal.1 .2 .1 .2,
+            },
+            proposal_status: serialized_governance_proposal.2 .0.into(),
+            new_variable_key_value: serialized_governance_proposal.2 .1,
+        }
+    }
+
     fn deserialize_sponsors(
         serialized_sponsors: BTreeMap<[u8; 32], U256>,
     ) -> BTreeMap<AccountHash, U256> {
