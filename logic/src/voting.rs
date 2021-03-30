@@ -1,7 +1,12 @@
 #![no_std]
 extern crate alloc;
 use crate::{
-    custom_types::custom_types::ProposalSerialized, error::*, proposal::ProposalStatus, Proposal,
+    custom_types::custom_types::{
+        GovernanceProposalSerialized, ProposalSerialized, VotersSerialized, VotingSerialized,
+    },
+    error::*,
+    proposal::{ProposalStatus, ProposalType},
+    GovernanceProposal, Proposal,
 };
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -11,16 +16,6 @@ use core::{
     ops::Add,
 };
 use types::{account::AccountHash, bytesrepr::FromBytes, ContractHash, PublicKey, U256};
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct ProjectId(pub u64);
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct Participant {
-    pub total_voting_power: u64,
-    pub used_voting_power: u64,
-    pub votes: BTreeMap<ProjectId, u64>,
-}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct VotingData {
@@ -42,36 +37,24 @@ pub enum VoteResult {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct Voting {
     pub start_timestamp: u64,
-    pub proposal: Proposal,
+    pub total_members: u64,
+    pub total_staked_reputation: U256,
+    pub proposal: Option<Proposal>,
+    pub governance_proposal: Option<GovernanceProposal>,
+    pub proposal_type: ProposalType,
     pub for_votes: U256,
     pub against_votes: U256,
+    pub input_reputation: U256,
     pub for_voters: BTreeMap<AccountHash, VotingData>,
     pub against_voters: BTreeMap<AccountHash, VotingData>,
-    pub total_staked_reputation: U256,
-    pub total_members: u64,
     pub result: VoteResult,
-    pub input_reputation: U256,
 }
-
-type ProjectsSerialized = BTreeMap<u64, [String; 5]>;
-
-type ParticipantsSerialized = BTreeMap<[u8; 32], (u64, u64, BTreeMap<u64, u64>)>;
-
-type VotingSerialized = (
-    // (start, end)
-    (u64, u64),
-    // Projects - [name, team_name, video_ling, github_link, google_drive_link]
-    ProjectsSerialized,
-    // Participants
-    ParticipantsSerialized,
-);
 
 impl Voting {
     pub fn new(
         start_timestamp: u64,
-        end_timestamp: u64,
         serialized_proposal: ProposalSerialized,
-    ) -> Result<Voting, StartNotBeforeEnd> {
+    ) -> Result<Voting, VotingEngineError> {
         Ok(Voting {
             start_timestamp,
             against_voters: BTreeMap::new(),
@@ -81,8 +64,31 @@ impl Voting {
             total_members: 0 as u64,
             total_staked_reputation: U256::from(0),
             result: VoteResult::InVote,
-            proposal: Proposal::deserialize(serialized_proposal),
+            proposal: Some(Proposal::deserialize(serialized_proposal)),
             input_reputation: U256::from(0),
+            governance_proposal: None,
+            proposal_type: ProposalType::Grant,
+        })
+    }
+    pub fn new_governance(
+        start_timestamp: u64,
+        serialized_governance_proposal: GovernanceProposalSerialized,
+    ) -> Result<Voting, VotingEngineError> {
+        Ok(Voting {
+            start_timestamp,
+            against_voters: BTreeMap::new(),
+            for_voters: BTreeMap::new(),
+            against_votes: U256::from(0),
+            for_votes: U256::from(0),
+            total_members: 0 as u64,
+            total_staked_reputation: U256::from(0),
+            result: VoteResult::InVote,
+            proposal: None,
+            input_reputation: U256::from(0),
+            governance_proposal: Some(GovernanceProposal::deserialize(
+                serialized_governance_proposal,
+            )),
+            proposal_type: ProposalType::Governance,
         })
     }
 
@@ -91,16 +97,24 @@ impl Voting {
     }
 
     pub fn end_at(&self) -> u64 {
-        self.proposal.vote_configuration.timeout
+        if self.proposal_type == ProposalType::Grant {
+            self.proposal.clone().unwrap().vote_configuration.timeout
+        } else {
+            self.governance_proposal
+                .clone()
+                .unwrap()
+                .vote_configuration
+                .timeout
+        }
     }
 
     pub fn calculate_vote_outcome(
         &mut self,
         current_time: u64,
-        reputation_allocation_ratio: U256,
+        reputation_allocation_ratio: u64,
     ) -> Result<VoteResult, VotingEngineError> {
         // Check that voting has ended
-        let proposal: Proposal = self.proposal.clone();
+        let proposal: Proposal = self.proposal.clone().unwrap();
         let timeout: u64 = proposal.vote_configuration.timeout;
         if timeout > current_time {
             return Err(VotingEngineError::VotingOngoing);
@@ -109,34 +123,73 @@ impl Voting {
             return Err(VotingEngineError::VotingNotOngoing);
         }
         if self.total_members < proposal.vote_configuration.member_quorum {
-            return Ok(VoteResult::MemberQuorumUnmet);
+            self.result = VoteResult::MemberQuorumUnmet;
         }
         if self.total_staked_reputation < proposal.vote_configuration.reputation_quorum {
-            return Ok(VoteResult::ReputationQuorumUnmet);
+            self.result = VoteResult::ReputationQuorumUnmet;
         }
         let total_votes = self.for_votes + self.against_votes;
         if self.for_votes > self.against_votes {
             let percentage: U256 = (self.for_votes * 10000) / (U256::from(100) * (total_votes));
-            if percentage <= self.proposal.vote_configuration.threshold.into() {
-                return Ok(VoteResult::PassThresholdUnmet);
+            if percentage <= proposal.vote_configuration.threshold.into() {
+                self.result = VoteResult::PassThresholdUnmet;
             } else {
                 // calculate input reputation
                 let denominator =
                     (U256::from(10).pow(U256::from(12))) / reputation_allocation_ratio;
                 let input_reputation =
-                    (self.proposal.cost * U256::from(10).pow(U256::from(16))) / denominator; // 8 decimals
+                    (proposal.cost * U256::from(10).pow(U256::from(16))) / denominator; // 8 decimals
                 self.input_reputation = input_reputation;
-                return Ok(VoteResult::Approved);
+                self.result = VoteResult::Approved;
             }
         } else if self.against_votes >= self.for_votes {
             let percentage: U256 = (self.against_votes * 10000) / (U256::from(100) * (total_votes));
-            if percentage <= self.proposal.vote_configuration.threshold.into() {
-                return Ok(VoteResult::FailThresholdUnmet);
+            if percentage <= proposal.vote_configuration.threshold.into() {
+                self.result = VoteResult::FailThresholdUnmet;
             } else {
-                return Ok(VoteResult::Rejected);
+                self.result = VoteResult::Rejected;
             }
         }
-        Ok(VoteResult::Approved)
+        Ok(self.result)
+    }
+    pub fn calculate_governance_vote_outcome(
+        &mut self,
+        current_time: u64,
+    ) -> Result<(VoteResult, (bool, (String, String))), VotingEngineError> {
+        // Check that voting has ended
+        let proposal: GovernanceProposal = self.governance_proposal.clone().unwrap();
+        let timeout: u64 = proposal.vote_configuration.timeout;
+        let mut executed: bool = false;
+        if timeout > current_time {
+            return Err(VotingEngineError::VotingOngoing);
+        }
+        if proposal.proposal_status != ProposalStatus::InFullVote {
+            return Err(VotingEngineError::VotingNotOngoing);
+        }
+        if self.total_staked_reputation < proposal.vote_configuration.full_vote_quorum {
+            self.result = VoteResult::ReputationQuorumUnmet;
+        }
+        let total_votes = self.for_votes + self.against_votes;
+        if self.for_votes > self.against_votes {
+            let percentage: U256 = (self.for_votes * 10000) / (U256::from(100) * (total_votes));
+            if percentage <= proposal.vote_configuration.full_vote_threshold.into() {
+                self.result = VoteResult::PassThresholdUnmet;
+            } else {
+                // Vote passed
+                if self.result == VoteResult::Approved {
+                    executed = true;
+                }
+                self.result = VoteResult::Approved;
+            }
+        } else if self.against_votes >= self.for_votes {
+            let percentage: U256 = (self.against_votes * 10000) / (U256::from(100) * (total_votes));
+            if percentage <= proposal.vote_configuration.full_vote_threshold.into() {
+                self.result = VoteResult::FailThresholdUnmet;
+            } else {
+                self.result = VoteResult::Rejected;
+            }
+        }
+        Ok((self.result, (executed, proposal.new_variable_key_value)))
     }
 
     pub fn claim_reputation(&mut self, caller: AccountHash) -> Result<U256, VotingEngineError> {
@@ -167,24 +220,30 @@ impl Voting {
                 let voter_shares =
                     (voting_data.reputation_staked * 1000) / (U256::from(10) * (similar_votes));
                 let mut rep_gained: U256 = (voter_shares * (opposite_votes)) / 100;
-                if !vote_rejected {
-                    // If vote was approved, distribute input reputation
-                    let nominator = self.input_reputation;
-                    if caller == self.proposal.proposer {
-                        // Give OP 1-Policing Ratio rep
+                if self.proposal_type == ProposalType::Grant {
+                    if !vote_rejected {
+                        // If vote was approved, distribute input reputation
+                        let nominator = self.input_reputation;
+                        if caller == self.proposal.clone().unwrap().proposer {
+                            // Give OP 1-Policing Ratio rep
 
-                        // Op ratio = 1-Policing Ratio
-                        let op_ratio = U256::from(10000)
-                            - U256::from(self.proposal.ratios.policing_ratio * 100);
-                        let denominator: U256 =
-                            (U256::from(10).pow(U256::from(12))) / (U256::from(10000) / op_ratio);
-                        rep_gained += nominator / denominator;
-                    } else {
-                        // NOT OP, gets pro rata policing ratio
-                        let denominator: U256 = (U256::from(10).pow(U256::from(12)))
-                            / (U256::from(10000) / self.proposal.ratios.policing_ratio * 100);
-                        rep_gained =
-                            (nominator / denominator) / (U256::from(10000) / (voter_shares * 100));
+                            // Op ratio = 1-Policing Ratio
+                            let op_ratio = U256::from(10000)
+                                - U256::from(
+                                    self.proposal.clone().unwrap().ratios.policing_ratio * 100,
+                                );
+                            let denominator: U256 = (U256::from(10).pow(U256::from(12)))
+                                / (U256::from(10000) / op_ratio);
+                            rep_gained += nominator / denominator;
+                        } else {
+                            // NOT OP, gets pro rata policing ratio
+                            let denominator: U256 = (U256::from(10).pow(U256::from(12)))
+                                / (U256::from(10000)
+                                    / self.proposal.clone().unwrap().ratios.policing_ratio
+                                    * 100);
+                            rep_gained = (nominator / denominator)
+                                / (U256::from(10000) / (voter_shares * 100));
+                        }
                     }
                 }
                 Ok(rep_gained + voting_data.reputation_staked)
@@ -231,20 +290,50 @@ impl Voting {
         committed_reputation: U256,
         vote_direction: bool,
     ) -> Result<(), VotingEngineError> {
-        if current_time > self.proposal.vote_configuration.timeout {
-            return Err(VotingEngineError::VotingEnded);
+        let is_for_voter = self.for_voters.contains_key(&caller);
+        let is_against_voter = self.against_voters.contains_key(&caller);
+        if is_against_voter || is_for_voter {
+            return Err(VotingEngineError::AlreadyVoted);
         }
-        if self.proposal.proposal_status != ProposalStatus::InFullVote {
-            return Err(VotingEngineError::VotingNotOngoing);
+        if self.proposal_type == ProposalType::Grant {
+            if current_time > self.proposal.clone().unwrap().vote_configuration.timeout {
+                return Err(VotingEngineError::VotingEnded);
+            }
+            if self.proposal.clone().unwrap().proposal_status != ProposalStatus::InFullVote {
+                return Err(VotingEngineError::VotingNotOngoing);
+            }
+        } else {
+            if current_time
+                > self
+                    .governance_proposal
+                    .clone()
+                    .unwrap()
+                    .vote_configuration
+                    .timeout
+            {
+                return Err(VotingEngineError::VotingEnded);
+            }
+            if self.proposal.clone().unwrap().proposal_status != ProposalStatus::InFullVote {
+                return Err(VotingEngineError::VotingNotOngoing);
+            }
         }
+
         if reputation_to_stake > reputation_balance - committed_reputation {
             return Err(VotingEngineError::InvalidReputationToStake);
         }
-        let voter_staking_limit: U256 = self.proposal.vote_configuration.voter_staking_limits;
-        let staking_percentage: U256 = reputation_balance / reputation_balance;
-        if staking_percentage > voter_staking_limit {
-            return Err(VotingEngineError::StakingLimitReached);
+        if self.proposal_type == ProposalType::Grant {
+            let voter_staking_limit: U256 = self
+                .proposal
+                .clone()
+                .unwrap()
+                .vote_configuration
+                .voter_staking_limits;
+            let staking_percentage: U256 = reputation_balance / reputation_balance;
+            if staking_percentage > voter_staking_limit {
+                return Err(VotingEngineError::StakingLimitReached);
+            }
         }
+
         let voting_data: VotingData = VotingData {
             claimed: false,
             reputation_staked: reputation_to_stake,
@@ -265,203 +354,113 @@ impl Voting {
         Ok(())
     }
 
-    //     fn validate_dates(start_timestamp: u64, end_timestamp: u64) -> Result<(), StartNotBeforeEnd> {
-    //         if end_timestamp <= start_timestamp {
-    //             Err(StartNotBeforeEnd)
-    //         } else {
-    //             Ok(())
-    //         }
-    //     }
+    pub fn serialize(&self) -> VotingSerialized {
+        let mut proposal_option: Option<ProposalSerialized>;
+        let mut governance_proposal_option: Option<GovernanceProposalSerialized>;
+        if (self.proposal_type == ProposalType::Grant) {
+            proposal_option = Some(Proposal::serialize(&self.proposal.as_ref().unwrap()));
+            governance_proposal_option = None;
+        } else {
+            proposal_option = None;
+            governance_proposal_option = Some(GovernanceProposal::serialize(
+                &self.governance_proposal.as_ref().unwrap(),
+            ));
+        }
+        (
+            (
+                (
+                    self.start_timestamp,
+                    self.total_members,
+                    self.total_staked_reputation,
+                ),
+                (
+                    proposal_option,
+                    governance_proposal_option,
+                    self.proposal_type as u8,
+                ),
+            ),
+            (self.for_votes, self.against_votes, self.input_reputation),
+            (
+                self.serialize_voters().0,
+                self.serialize_voters().1,
+                self.result as u8,
+            ),
+        )
+    }
 
-    //     pub fn add_or_update_participant(
-    //         &mut self,
-    //         account_hash: AccountHash,
-    //         total_voting_power: u64,
-    //     ) -> Result<(), NewVotingPowerBelowUsed> {
-    //         match self.participants.get_mut(&account_hash) {
-    //             Some(participant) => {
-    //                 if total_voting_power < participant.used_voting_power {
-    //                     Err(NewVotingPowerBelowUsed)
-    //                 } else {
-    //                     participant.total_voting_power = total_voting_power;
-    //                     Ok(())
-    //                 }
-    //             }
-    //             None => {
-    //                 self.participants.insert(
-    //                     account_hash,
-    //                     Participant {
-    //                         total_voting_power,
-    //                         used_voting_power: 0,
-    //                         votes: BTreeMap::new(),
-    //                     },
-    //                 );
-    //                 Ok(())
-    //             }
-    //         }
-    //     }
+    fn serialize_voters(&self) -> (VotersSerialized, VotersSerialized) {
+        let mut for_voters_output = BTreeMap::new();
+        for (key, voting_data) in self.for_voters.iter() {
+            for_voters_output.insert(
+                key.value(),
+                (
+                    voting_data.reputation_staked,
+                    voting_data.vote,
+                    voting_data.claimed,
+                ),
+            );
+        }
+        let mut against_voters_output = BTreeMap::new();
+        for (key, voting_data) in self.against_voters.iter() {
+            against_voters_output.insert(
+                key.value(),
+                (
+                    voting_data.reputation_staked,
+                    voting_data.vote,
+                    voting_data.claimed,
+                ),
+            );
+        }
+        (for_voters_output, against_voters_output)
+    }
 
-    //     pub fn remove_participant_if_exists(&mut self, account_hash: &AccountHash) {
-    //         self.participants.remove(account_hash);
-    //     }
+    pub fn deserialize(serialized_voting: VotingSerialized) -> Voting {
+        let mut proposal_type: ProposalType = ProposalType::Grant;
+        let mut proposal: Option<Proposal>;
+        let mut governance_proposal: Option<GovernanceProposal>;
+        if serialized_voting.0 .1 .2 == 1 {
+            proposal_type = ProposalType::Governance;
+            proposal = None;
+            governance_proposal = Some(GovernanceProposal::deserialize(
+                serialized_voting.0 .1 .1.unwrap(),
+            ))
+        } else {
+            // is grant
+            proposal = Some(Proposal::deserialize(serialized_voting.0 .1 .0.unwrap()));
+            governance_proposal = None;
+        }
+        Voting {
+            start_timestamp: serialized_voting.0 .0 .0,
+            total_members: serialized_voting.0 .0 .1,
+            total_staked_reputation: serialized_voting.0 .0 .2,
+            proposal: proposal,
+            governance_proposal: governance_proposal,
+            proposal_type: proposal_type,
+            for_votes: serialized_voting.1 .0,
+            against_votes: serialized_voting.1 .1,
+            input_reputation: serialized_voting.1 .2,
+            for_voters: Voting::deserialize_voters(serialized_voting.2 .0),
+            against_voters: Voting::deserialize_voters(serialized_voting.2 .1),
+            result: serialized_voting.2 .2.into(),
+        }
+    }
 
-    //     pub fn add_or_update_project(&mut self, project_id: ProjectId, project: Project) {
-    //         self.projects.insert(project_id, project);
-    //     }
-
-    //     pub fn remove_project_if_exists_and_cancel_votes(&mut self, project_id: ProjectId) {
-    //         let result = self.projects.remove(&project_id);
-    //         if result.is_some() {
-    //             for (_, participant) in self.participants.iter_mut() {
-    //                 let vote = (*participant).votes.remove(&project_id);
-    //                 if let Some(value) = vote {
-    //                     (*participant).used_voting_power -= value;
-    //                 }
-    //             }
-    //         }
-    //     }
-
-    //     pub fn cast_vote(
-    //         &mut self,
-    //         account_hash: AccountHash,
-    //         project_id: ProjectId,
-    //         vote: u64,
-    //         vote_at: u64,
-    //     ) -> Result<(), VotingEngineError> {
-    //         // Check if the vote happen in the time bounds.
-    //         if vote_at < self.start_timestamp {
-    //             return Err(VotingEngineError::VotingNotStarted);
-    //         }
-    //         if vote_at >= self.end_timestamp {
-    //             return Err(VotingEngineError::VotingEnded);
-    //         }
-
-    //         // Return error if the project is not on the list of all projects.
-    //         if !self.projects.contains_key(&project_id) {
-    //             return Err(VotingEngineError::ProjectDoesNotExists);
-    //         }
-
-    //         // Check if the participant exists.
-    //         match self.participants.get_mut(&account_hash) {
-    //             // If the participant doesn't exists return error.
-    //             None => Err(VotingEngineError::NotAParticipant),
-    //             // If the participant exists try to cast a vote.
-    //             Some(participant) => {
-    //                 // Read the current vote
-    //                 let current_vote = participant.votes.get(&project_id).unwrap_or(&0);
-
-    //                 // Check the sum of all casted votes after is not more then allowed.
-    //                 let new_used_voting_power = participant.used_voting_power + vote - current_vote;
-    //                 if new_used_voting_power > participant.total_voting_power {
-    //                     return Err(VotingEngineError::NotEnoughVotingPower);
-    //                 }
-
-    //                 // If the vote is 0, remove project from the list.
-    //                 // If not, update the vote.
-    //                 if vote == 0 {
-    //                     (*participant).votes.remove(&project_id);
-    //                 } else {
-    //                     (*participant).votes.insert(project_id, vote);
-    //                 }
-
-    //                 // Update the used voting power.
-    //                 (*participant).used_voting_power = new_used_voting_power;
-    //                 Ok(())
-    //             }
-    //         }
-    //     }
-
-    //     pub fn serialize(&self) -> VotingSerialized {
-    //         (
-    //             (self.start_timestamp, self.end_timestamp),
-    //             self.serialize_projects(),
-    //             self.serialize_participants(),
-    //         )
-    //     }
-
-    //     fn serialize_projects(&self) -> ProjectsSerialized {
-    //         let mut output = BTreeMap::new();
-    //         for (key, project) in self.projects.iter() {
-    //             output.insert(
-    //                 key.0,
-    //                 [
-    //                     project.name.clone(),
-    //                     project.team_name.clone(),
-    //                     project.video_link.clone(),
-    //                     project.github_link.clone(),
-    //                     project.google_drive_link.clone(),
-    //                 ],
-    //             );
-    //         }
-    //         output
-    //     }
-
-    //     fn serialize_participants(&self) -> ParticipantsSerialized {
-    //         let mut output = BTreeMap::new();
-    //         for (key, participant) in self.participants.iter() {
-    //             let mut votes = BTreeMap::new();
-    //             for (project_id, vote) in participant.votes.iter() {
-    //                 votes.insert(project_id.0, *vote);
-    //             }
-    //             output.insert(
-    //                 key.value(),
-    //                 (
-    //                     participant.total_voting_power,
-    //                     participant.used_voting_power,
-    //                     votes,
-    //                 ),
-    //             );
-    //         }
-    //         output
-    //     }
-
-    //     pub fn deserialize(value: VotingSerialized) -> Voting {
-    //         Voting {
-    //             start_timestamp: (value.0).0,
-    //             end_timestamp: (value.0).1,
-    //             projects: Voting::deserialize_projects(value.1),
-    //             participants: Voting::deserialize_participants(value.2),
-    //         }
-    //     }
-
-    //     fn deserialize_projects(value: ProjectsSerialized) -> BTreeMap<ProjectId, Project> {
-    //         let mut output = BTreeMap::new();
-    //         for (id, list) in value.iter() {
-    //             output.insert(
-    //                 ProjectId(*id),
-    //                 Project {
-    //                     name: list[0].clone(),
-    //                     team_name: list[1].clone(),
-    //                     video_link: list[2].clone(),
-    //                     github_link: list[3].clone(),
-    //                     google_drive_link: list[4].clone(),
-    //                 },
-    //             );
-    //         }
-    //         output
-    //     }
-
-    //     fn deserialize_participants(
-    //         value: ParticipantsSerialized,
-    //     ) -> BTreeMap<AccountHash, Participant> {
-    //         let mut output = BTreeMap::new();
-    //         for (account_hash, (total_voting_power, used_voting_power, votes)) in value.iter() {
-    //             let mut output_votes = BTreeMap::new();
-    //             for (project_id, vote) in votes {
-    //                 output_votes.insert(ProjectId(*project_id), *vote);
-    //             }
-    //             output.insert(
-    //                 AccountHash::new(*account_hash),
-    //                 Participant {
-    //                     total_voting_power: *total_voting_power,
-    //                     used_voting_power: *used_voting_power,
-    //                     votes: output_votes,
-    //                 },
-    //             );
-    //         }
-    //         output
-    //     }
-    // }
+    fn deserialize_voters(
+        voters_serialized: VotersSerialized,
+    ) -> BTreeMap<AccountHash, VotingData> {
+        let mut deserialized_voters: BTreeMap<AccountHash, VotingData> = BTreeMap::new();
+        for (key, voting_data) in voters_serialized {
+            deserialized_voters.insert(
+                AccountHash::new(key),
+                VotingData {
+                    reputation_staked: voting_data.0,
+                    vote: voting_data.1,
+                    claimed: voting_data.2,
+                },
+            );
+        }
+        deserialized_voters
+    }
 
     // #[cfg(test)]
     // mod tests {
@@ -810,4 +809,20 @@ impl Voting {
     //         assert_eq!(voting.start_at(), new_start);
     //         assert_eq!(voting.end_at(), new_end);
     //     }
+}
+
+impl From<u8> for VoteResult {
+    fn from(orig: u8) -> Self {
+        match orig {
+            0 => return VoteResult::InVote,
+            1 => return VoteResult::FailCriteriaUnmet,
+            2 => return VoteResult::Approved,
+            3 => return VoteResult::Rejected,
+            4 => return VoteResult::MemberQuorumUnmet,
+            5 => return VoteResult::ReputationQuorumUnmet,
+            6 => return VoteResult::PassThresholdUnmet,
+            7 => return VoteResult::FailThresholdUnmet,
+            _ => return VoteResult::InVote,
+        };
+    }
 }

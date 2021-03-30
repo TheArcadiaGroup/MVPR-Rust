@@ -33,6 +33,7 @@ pub enum Error {
     NotAMember,
     InvalidReputationToStake,
     StakingLimitReached,
+    AlreadyVoted,
 }
 
 impl Error {
@@ -75,6 +76,7 @@ impl From<VotingEngineError> for Error {
             VotingEngineError::VotingNotOngoing => Error::VoteFailed,
             VotingEngineError::InvalidReputationToStake => Error::InvalidReputationToStake,
             VotingEngineError::StakingLimitReached => Error::StakingLimitReached,
+            VotingEngineError::AlreadyVoted => Error::AlreadyVoted,
         }
     }
 }
