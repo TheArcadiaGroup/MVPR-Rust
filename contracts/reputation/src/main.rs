@@ -76,8 +76,9 @@ mod Reputation {
         get_key(&balance_key(&account))
     }
     #[casperlabs_method]
-    fn transfer(recipient: AccountHash, amount: U256) {
+    fn transfer(recipient: AccountHash, amount: U256) -> bool {
         _transfer(runtime::get_caller(), recipient, amount);
+        true
     }
 
     fn _transfer(sender: AccountHash, recipient: AccountHash, amount: U256) {
@@ -90,7 +91,7 @@ mod Reputation {
     }
 
     #[casperlabs_method]
-    fn transferFrom(from: AccountHash, to: AccountHash, amount: U256) {
+    fn transferFrom(from: AccountHash, to: AccountHash, amount: U256) -> bool {
         assert_admin();
         let mut sender_balance: U256 = get_key(&balance_key(&from));
         let mut receiver_balance: U256 = get_key(&balance_key(&to));
@@ -98,6 +99,7 @@ mod Reputation {
         receiver_balance = receiver_balance + amount;
         set_key(&balance_key(&from), sender_balance);
         set_key(&balance_key(&to), receiver_balance);
+        true
     }
     #[casperlabs_method]
     fn mint(account: AccountHash, weight: Weight) {
