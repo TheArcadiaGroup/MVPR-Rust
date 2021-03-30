@@ -4,6 +4,7 @@ members = [
     "contracts/reputation",
     "contracts/proposal",
     "contracts/voting",
+    "contracts/governance",
     "logic/",
 	"tests"
 ]
