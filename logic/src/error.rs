@@ -13,7 +13,8 @@ pub enum VotingEngineError {
     VoteDidNotFail,
     VoteFailed,
     InvalidReputationToStake,
-    StakingLimitReached
+    StakingLimitReached,
+    AlreadyVoted,
 }
 #[derive(PartialEq, Debug)]
 pub enum ProposalError {
