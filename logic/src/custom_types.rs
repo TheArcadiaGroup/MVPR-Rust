@@ -51,4 +51,46 @@ pub mod custom_types {
 
     type RatiosSerialized = ([u8; 3]);
     type VoteConfigurationSerialized = ((u64, U256), (u8, u64, U256));
+
+    pub type GovernanceProposalSerialized = (
+        // 0
+        // name, storage_pointer, storage_fingerprint
+        (String, String, [u8; 32]), // 0.0 // name, repo url, proposer
+        (
+            // 0.1
+            // sponsors
+            SponsorsSerialized,
+            // proposal type
+            u8,
+            // vote config
+            GovernanceVoteConfigurationSerialized,
+        ),
+        (
+            // 0.2
+            // proposal status
+            u8,
+            // new_variable_key_value
+            (String, String),
+        ),
+    );
+
+    pub type GovernanceVoteConfigurationSerialized = ((U256, u64, String), (U256, u64, u64));
+
+    pub type VotingDataSerialized = (U256, bool, bool);
+
+    pub type VotersSerialized = BTreeMap<[u8; 32], VotingDataSerialized>;
+
+    pub type VotingSerialized = (
+        // (start, end)
+        (
+            (u64, u64, U256),
+            (
+                Option<ProposalSerialized>,
+                Option<GovernanceProposalSerialized>,
+                u8,
+            ),
+        ),
+        (U256, U256, U256),
+        (VotersSerialized, VotersSerialized, u8),
+    );
 }
