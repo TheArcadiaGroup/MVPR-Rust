@@ -22,6 +22,7 @@ pub struct Milestone {
     pub result: u8,
     pub funding_tranches: BTreeMap<u64, FundingTranche>,
     pub funding_tranches_size: u64,
+    pub timeout: u64,
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Ratios {
@@ -119,8 +120,13 @@ type ProposalSerialized = (
     ),
 );
 
-type MilestoneSerialized =
-    BTreeMap<u64, ((u8, u8, u8), BTreeMap<u64, FundingTrancheSerialized>, u64)>;
+type MilestoneSerialized = BTreeMap<
+    u64,
+    (
+        (u8, u8, u8),
+        (BTreeMap<u64, FundingTrancheSerialized>, u64, u64),
+    ),
+>;
 
 type SponsorsSerialized = BTreeMap<[u8; 32], U256>;
 
@@ -169,7 +175,7 @@ impl Proposal {
         citations: Vec<u64>,
         ratios: Vec<u8>,
         vote_configuration: VoteConfigurationSerialized,
-        milestones: Vec<(u8, u8, Vec<(u8, U256, U256)>)>,
+        milestones: Vec<((u8, u8, Vec<(u8, U256, U256)>), u64)>,
         staked_rep: U256,
         proposer: AccountHash,
         system_policing_ratio: u8,
@@ -201,13 +207,13 @@ impl Proposal {
         let mut milestones_sum: U256 = U256::from(0);
         let mut progress_percentages_sum: u8 = 0;
         for (i, mstone) in milestones.iter().enumerate() {
-            let milestone_type = mstone.0;
-            let progress_percentage = mstone.1;
+            let milestone_type: u8 = mstone.0 .0;
+            let progress_percentage: u8 = mstone.0 .1;
             progress_percentages_sum = progress_percentages_sum.add(progress_percentage);
             let (funding_tranches, milestone_amount) =
-                Self::create_funding_tranches_mapping(&mstone.2);
+                Self::create_funding_tranches_mapping(&mstone.0 .2);
             milestones_sum = milestones_sum.add(milestone_amount);
-            let funding_tranches_size = mstone.2.len();
+            let funding_tranches_size = mstone.0 .2.len();
             mstones.insert(
                 i as u64,
                 Milestone {
@@ -216,6 +222,7 @@ impl Proposal {
                     funding_tranches_size: funding_tranches_size as u64,
                     milestone_type,
                     result: 2,
+                    timeout: mstone.1,
                 },
             );
         }
@@ -344,8 +351,11 @@ impl Proposal {
                         milestone.progress_percentage,
                         milestone.result,
                     ),
-                    serialized_funding_tranches,
-                    milestone.funding_tranches_size,
+                    (
+                        serialized_funding_tranches,
+                        milestone.funding_tranches_size,
+                        milestone.timeout,
+                    ),
                 ),
             );
         }
@@ -418,8 +428,9 @@ impl Proposal {
                     milestone_type: milestone.0 .0,
                     progress_percentage: milestone.0 .1,
                     result: milestone.0 .2,
-                    funding_tranches: Self::deserialize_funding_tranches(milestone.1),
-                    funding_tranches_size: milestone.2,
+                    funding_tranches: Self::deserialize_funding_tranches(milestone.1 .0),
+                    funding_tranches_size: milestone.1 .1,
+                    timeout: milestone.1 .2,
                 },
             );
         }
