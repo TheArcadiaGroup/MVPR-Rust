@@ -32,8 +32,7 @@ use logic::{
     custom_types::custom_types::{
         GovernanceProposalSerialized, ProposalSerialized, VotersSerialized, VotingSerialized,
     },
-    voting::{VoteResult, Voting},
-    Proposal,
+    Proposal, ProposalType, VoteResult, Voting,
 };
 
 const GOVERNANCE_CONTRACT_HASH_KEY: &str = "governance_contract_hash";
@@ -44,19 +43,14 @@ const NUMBER_OF_VOTES_KEY: &str = "number_of_votes";
 
 #[casperlabs_contract]
 mod Vote {
-    use contract::contract_api::runtime::has_key;
 
     #[casperlabs_constructor]
-    fn constructor(
-        reputation_contract_hash: ContractHash,
-        reputation_contract_address: AccountHash,
-        reputation_allocation_ratio: U256,
-    ) {
+    fn constructor() {
         set_key(NUMBER_OF_VOTES_KEY, U256::from(0));
     }
 
     #[casperlabs_method]
-    fn new_vote(proposal: ProposalSerialized) -> bool {
+    fn new_vote(proposal: ProposalSerialized) -> U256 {
         // WHO CAN CALL THIS FUNCTION?
         // assert_caller(get_key(REPUTATION_CONTRACT_ADDRESS_KEY));
         let current_time: u64 = runtime::get_blocktime().into();
@@ -66,7 +60,7 @@ mod Vote {
             .map_err(|e| runtime::revert(Error::from(e)))
             .unwrap();
         set_key(NUMBER_OF_VOTES_KEY, next_vote_index + 1);
-        true
+        get_key(NUMBER_OF_VOTES_KEY)
     }
     #[casperlabs_method]
     fn new_governance_vote(governance_proposal: GovernanceProposalSerialized) -> bool {
@@ -160,7 +154,10 @@ mod Vote {
         let mut vote: Voting = Voting::deserialize(vote_serialized.unwrap());
         let reputation_allocation_ratio: u64 = internal_get_reputation_allocation_ratio();
         let outcome: VoteResult;
-        if vote.proposal_type as u8 == 0 {
+        if vote.proposal_type == ProposalType::Grant
+            || vote.proposal_type == ProposalType::AnalysisAcceptance
+        {
+            // This is a grant or analysis acceptance vote
             outcome = Voting::calculate_vote_outcome(
                 &mut vote,
                 current_time,
@@ -168,6 +165,27 @@ mod Vote {
             )
             .map_err(|e| runtime::revert(Error::from(e)))
             .unwrap();
+            if (outcome == VoteResult::Approved) {
+                let governance_contract_hash: ContractHash = get_key(GOVERNANCE_CONTRACT_HASH_KEY);
+                let mut args: RuntimeArgs = RuntimeArgs::new();
+                let execution_contract_hash: ContractHash = runtime::call_contract(
+                    governance_contract_hash,
+                    "execution_contract_hash",
+                    args.clone(),
+                );
+                if (vote.proposal_type == ProposalType::AnalysisAcceptance) {
+                    args.insert("project_index", vote.proposal.unwrap().cost);
+                    args.insert("milestone_analysis_index", vote_index);
+                    runtime::call_contract::<bool>(
+                        execution_contract_hash,
+                        "approve_milestone_analysis",
+                        args,
+                    );
+                } else {
+                    args.insert("proposal", vote.proposal.unwrap().serialize());
+                    runtime::call_contract::<bool>(execution_contract_hash, "new_project", args);
+                }
+            }
         } else {
             // This is a governance proposal
             let (result, (executed, (key, value))) =
@@ -176,14 +194,13 @@ mod Vote {
                     .unwrap();
             if (!executed) {
                 let governance_contract_hash: ContractHash = get_key(GOVERNANCE_CONTRACT_HASH_KEY);
-                let mut voting_engine_address_args: RuntimeArgs = RuntimeArgs::new();
+                let voting_engine_address_args: RuntimeArgs = RuntimeArgs::new();
                 let voting_engine_contract_hash: ContractHash = runtime::call_contract(
                     governance_contract_hash,
                     "voting_engine_address",
                     voting_engine_address_args,
                 );
-                let new_variable_key_value: (String, String) =
-                    vote.governance_proposal.unwrap().new_variable_key_value;
+                let new_variable_key_value: (String, String) = (key, value);
                 let mut governance_args: RuntimeArgs = RuntimeArgs::new();
                 if (new_variable_key_value.0.clone() == "update_policing_ratio") {
                     let value = new_variable_key_value.1.parse::<u64>().unwrap();
@@ -208,7 +225,7 @@ mod Vote {
                     governance_args.insert(new_variable_key_value.0.clone(), value);
                 }
                 // Execute proposal.
-                let execution_result: bool = runtime::call_contract(
+                runtime::call_contract::<bool>(
                     voting_engine_contract_hash,
                     &new_variable_key_value.0,
                     governance_args,
