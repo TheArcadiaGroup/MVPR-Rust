@@ -28,7 +28,7 @@ pub mod custom_types {
                 // vote configuration
                 VoteConfigurationSerialized,
                 // milestones
-                MilestoneSerialized,
+                BTreeMap<u64, MilestoneSerialized>,
             ),
         ),
         (
@@ -42,15 +42,17 @@ pub mod custom_types {
         ),
     );
 
-    type MilestoneSerialized =
-        BTreeMap<u64, ((u8, u8, u8), BTreeMap<u64, FundingTrancheSerialized>, u64)>;
+    pub type MilestoneSerialized = (
+        (u8, u8, u8),
+        (BTreeMap<u64, FundingTrancheSerialized>, u64, u64),
+    );
 
-    type SponsorsSerialized = BTreeMap<[u8; 32], U256>;
+    pub type SponsorsSerialized = BTreeMap<[u8; 32], U256>;
 
-    type FundingTrancheSerialized = (u8, U256, U256);
+    pub type FundingTrancheSerialized = (u8, U256, U256);
 
-    type RatiosSerialized = ([u8; 3]);
-    type VoteConfigurationSerialized = ((u64, U256), (u8, u64, U256));
+    pub type RatiosSerialized = (u64, u64, u64);
+    pub type VoteConfigurationSerialized = ((u64, U256), (u8, u64, U256));
 
     pub type GovernanceProposalSerialized = (
         // 0
@@ -92,5 +94,15 @@ pub mod custom_types {
         ),
         (U256, U256, U256),
         (VotersSerialized, VotersSerialized, u8),
+    );
+
+    pub type MilestoneAnalysisSerialized = (bool, BTreeMap<String, String>);
+    pub type ProjectSerialized = (
+        (ProposalSerialized, u64),
+        (
+            u8,
+            Vec<MilestoneSerialized>,
+            BTreeMap<U256, MilestoneAnalysisSerialized>,
+        ),
     );
 }
