@@ -1,6 +1,13 @@
 #![no_std]
 extern crate alloc;
-use crate::error::*;
+use crate::{
+    custom_types::custom_types::{
+        FundingTrancheSerialized, GovernanceProposalSerialized,
+        GovernanceVoteConfigurationSerialized, MilestoneSerialized, ProposalSerialized,
+        RatiosSerialized, SponsorsSerialized, VoteConfigurationSerialized,
+    },
+    error::*,
+};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -26,9 +33,9 @@ pub struct Milestone {
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Ratios {
-    pub policing_ratio: u8,
-    pub op_ratio: u8,
-    pub citation_ratio: u8,
+    pub policing_ratio: u64,
+    pub op_ratio: u64,
+    pub citation_ratio: u64,
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct VoteConfiguration {
@@ -78,6 +85,7 @@ pub struct GovernanceProposal {
 pub enum ProposalType {
     Grant,
     Governance,
+    AnalysisAcceptance,
 }
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum ProposalStatus {
@@ -85,86 +93,6 @@ pub enum ProposalStatus {
     InFullVote,
     FullVoteComplete,
 }
-type ProposalSerialized = (
-    (
-        // 0
-        // name, storage_pointer, storage_fingerprint
-        (String, String, String), // 0.0
-        (
-            // 0.1
-            // proposal type
-            u8,
-            // proposer
-            [u8; 32],
-            // citations
-            Vec<u64>,
-        ),
-        (
-            // 0.2
-            // ratios
-            RatiosSerialized,
-            // vote configuration
-            VoteConfigurationSerialized,
-            // milestones
-            MilestoneSerialized,
-        ),
-    ),
-    (
-        // 1
-        // Proposal status
-        u8, // 0.0
-        // Sponsors
-        SponsorsSerialized, // 0.1
-        // cost
-        U256, //0.2
-    ),
-);
-
-type MilestoneSerialized = BTreeMap<
-    u64,
-    (
-        (u8, u8, u8),
-        (BTreeMap<u64, FundingTrancheSerialized>, u64, u64),
-    ),
->;
-
-type SponsorsSerialized = BTreeMap<[u8; 32], U256>;
-
-type FundingTrancheSerialized = (u8, U256, U256);
-
-type RatiosSerialized = ([u8; 3]);
-type VoteConfigurationSerialized = ((u64, U256), (u8, u64, U256));
-// pub name: String,
-//     pub repository_url: String,
-//     pub proposer: AccountHash,
-//     pub sponsors: BTreeMap<AccountHash, U256>,
-//     pub proposal_type: ProposalType,
-//     pub vote_configuration: GovernanceVoteConfiguration,
-//     pub proposal_status: ProposalStatus,
-//     pub new_variable_key_value: (String, String),
-type GovernanceProposalSerialized = (
-    // 0
-    // name, storage_pointer, storage_fingerprint
-    (String, String, [u8; 32]), // 0.0 // name, repo url, proposer
-    (
-        // 0.1
-        // sponsors
-        SponsorsSerialized,
-        // proposal type
-        u8,
-        // vote config
-        GovernanceVoteConfigurationSerialized,
-    ),
-    (
-        // 0.2
-        // proposal status
-        u8,
-        // new_variable_key_value
-        (String, String),
-    ),
-);
-
-type GovernanceVoteConfigurationSerialized = ((U256, u64, String), (U256, u64, u64));
 
 impl Proposal {
     pub fn new(
@@ -173,17 +101,17 @@ impl Proposal {
         storage_fingerprint: String,
         category: u8,
         citations: Vec<u64>,
-        ratios: Vec<u8>,
+        ratios: (u64, u64, u64),
         vote_configuration: VoteConfigurationSerialized,
         milestones: Vec<((u8, u8, Vec<(u8, U256, U256)>), u64)>,
         staked_rep: U256,
         proposer: AccountHash,
-        system_policing_ratio: u8,
+        system_policing_ratio: u64,
         reputation_balance: U256,
         sponsors: Vec<(AccountHash, U256)>,
         cost: U256,
     ) -> Result<Proposal, ProposalError> {
-        let proposal_policing_ratio: u8 = *ratios.get(0).unwrap();
+        let proposal_policing_ratio: u64 = ratios.0;
         // let proposal_citation_ratio: u8 = *ratios.get(1).unwrap();
         if proposal_policing_ratio < system_policing_ratio || proposal_policing_ratio > 100 {
             return Err(ProposalError::InvalidPolicingRatio);
@@ -257,9 +185,9 @@ impl Proposal {
             citations: citations,
             milestones: mstones,
             ratios: Ratios {
-                policing_ratio: ratios.get(0).unwrap().clone(),
-                op_ratio: ratios.get(1).unwrap().clone(),
-                citation_ratio: ratios.get(2).unwrap().clone(),
+                policing_ratio: ratios.0,
+                op_ratio: ratios.1,
+                citation_ratio: 2,
             },
             proposal_status: ProposalStatus::InFullVote,
             sponsors: sponsors_mapping,
@@ -317,11 +245,11 @@ impl Proposal {
     }
 
     fn serialize_ratios(&self) -> RatiosSerialized {
-        [
+        (
             self.ratios.policing_ratio,
             self.ratios.op_ratio,
             self.ratios.citation_ratio,
-        ]
+        )
     }
     fn serialize_vote_configuration(&self) -> VoteConfigurationSerialized {
         (
@@ -336,8 +264,8 @@ impl Proposal {
             ),
         )
     }
-    fn serialize_milestones(&self) -> MilestoneSerialized {
-        let mut serialized_milestones: MilestoneSerialized = BTreeMap::new();
+    fn serialize_milestones(&self) -> BTreeMap<u64, MilestoneSerialized> {
+        let mut serialized_milestones: BTreeMap<u64, MilestoneSerialized> = BTreeMap::new();
         for (key, milestone) in self.milestones.iter() {
             let mut serialized_funding_tranches: BTreeMap<u64, FundingTrancheSerialized> =
                 BTreeMap::new();
@@ -399,9 +327,9 @@ impl Proposal {
             proposer: AccountHash::new(serialized_proposal.0 .1 .1),
             citations: serialized_proposal.0 .1 .2,
             ratios: Ratios {
-                policing_ratio: *serialized_proposal.0 .2 .0.get(0).unwrap(),
-                op_ratio: *serialized_proposal.0 .2 .0.get(1).unwrap(),
-                citation_ratio: *serialized_proposal.0 .2 .0.get(2).unwrap(),
+                policing_ratio: serialized_proposal.0 .2 .0.0,
+                op_ratio: serialized_proposal.0 .2 .0.1,
+                citation_ratio: serialized_proposal.0 .2 .0.2,
             },
             vote_configuration: VoteConfiguration {
                 member_quorum: serialized_proposal.0 .2 .1 .0 .0,
@@ -418,7 +346,7 @@ impl Proposal {
     }
 
     fn deserialize_milestones(
-        serialized_milestones: MilestoneSerialized,
+        serialized_milestones: BTreeMap<u64, MilestoneSerialized>,
     ) -> BTreeMap<u64, Milestone> {
         let mut deserialized_milestones: BTreeMap<u64, Milestone> = BTreeMap::new();
         for (key, milestone) in serialized_milestones {
@@ -502,27 +430,6 @@ impl GovernanceProposal {
     }
 
     pub fn serialize(&self) -> GovernanceProposalSerialized {
-        // type GovernanceProposalSerialized = (
-        //     // 0
-        //     // name, storage_pointer, storage_fingerprint
-        //     (String, String, [u8; 32]), // 0.0 // name, repo url, proposer
-        //     (
-        //         // 0.1
-        //         // sponsors
-        //         SponsorsSerialized,
-        //         // proposal type
-        //         u8,
-        //         // vote config
-        //         GovernanceVoteConfigurationSerialized,
-        //     ),
-        //     (
-        //         // 0.2
-        //         // proposal status
-        //         u8,
-        //         // new_variable_key_value
-        //         (String, String),
-        //     ),
-        // );
         (
             (
                 self.name.clone(),
