@@ -27,12 +27,11 @@ use types::{
 };
 
 use logic::{
-    custom_types::custom_types::GovernanceVoteConfigurationSerialized, voting::Voting,
-    GovernanceProposal, Proposal, ProposalError, VotingEngineError,
+    custom_types::custom_types::GovernanceVoteConfigurationSerialized, GovernanceProposal,
+    Proposal, ProposalError, Voting, VotingEngineError,
 };
 
 const MINIMUM_STABILITY_TIME_KEY: &str = "minimum_stability_time";
-const POLICING_RATIO: &str = "policing_ratio";
 const REPUTATION_CONTRACT_HASH_KEY: &str = "reputation_contract_hash";
 const GOVERNANCE_ADDRESS_KEY: &str = "governance";
 const VOTING_CONTRACT_HASH_KEY: &str = "voting_contract_hash";
@@ -41,32 +40,22 @@ const DEPLOYER_ADDRESS_KEY: &str = "deployer_address";
 const VOTING_CONTRACT_CHANGED_KEY: &str = "voting_contract_changed";
 const NUMBER_OF_GOVERNANCE_PROPOSALS_KEY: &str = "governance_proposals_number";
 const NUMBER_OF_PROPOSALS_KEY: &str = "proposals_number";
+const GOVERNANCE_CONTRACT_HASH_KEY: &str = "governance_contract_hash";
 #[casperlabs_contract]
 
-mod ProposawlEngine {
+mod ProposalEngine {
 
     #[casperlabs_constructor]
     fn constructor(
         minimum_stability_time: U256,
-        policing_ratio: u8,
-        reputation_contract_hash: ContractHash,
         governance_address: AccountHash,
+        governance_contract_hash: ContractHash,
     ) {
         set_key(MINIMUM_STABILITY_TIME_KEY, minimum_stability_time);
-        set_key(POLICING_RATIO, policing_ratio);
-        set_key(REPUTATION_CONTRACT_HASH_KEY, reputation_contract_hash);
         set_key(GOVERNANCE_ADDRESS_KEY, governance_address);
         set_key(DEPLOYER_ADDRESS_KEY, runtime::get_caller());
         set_key(VOTING_CONTRACT_CHANGED_KEY, false);
-    }
-    #[casperlabs_method]
-    fn name() -> String {
-        get_key("_name")
-    }
-
-    #[casperlabs_method]
-    fn policing_ratio() -> u8 {
-        get_key(POLICING_RATIO)
+        set_key(GOVERNANCE_CONTRACT_HASH_KEY, governance_contract_hash);
     }
 
     #[casperlabs_method]
@@ -75,27 +64,38 @@ mod ProposawlEngine {
     }
 
     #[casperlabs_method]
-    fn update_policing_ratio(new_policing_ratio: u8) {
-        assert_caller(get_key(GOVERNANCE_ADDRESS_KEY));
-        set_key(POLICING_RATIO, new_policing_ratio);
+    fn get_reputation_contract_hash() -> ContractHash {
+        let args: RuntimeArgs = RuntimeArgs::new();
+        runtime::call_contract::<ContractHash>(
+            get_key(GOVERNANCE_CONTRACT_HASH_KEY),
+            "reputation_contract_hash",
+            args,
+        )
     }
-
+    fn internal_get_reputation_contract_hash() -> ContractHash {
+        let args: RuntimeArgs = RuntimeArgs::new();
+        runtime::call_contract::<ContractHash>(
+            get_key(GOVERNANCE_CONTRACT_HASH_KEY),
+            "reputation_contract_hash",
+            args,
+        )
+    }
     #[casperlabs_method]
-    fn update_voting_contract_info(
-        new_voting_contract_address: AccountHash,
-        new_voting_contract_hash: ContractHash,
-    ) {
-        let deployer_address: AccountHash = get_key(DEPLOYER_ADDRESS_KEY);
-        let voting_contact_changed: bool = get_key(VOTING_CONTRACT_CHANGED_KEY);
-        // Deployer can only set the voting contract once after deployment.
-        if voting_contact_changed {
-            assert_caller(get_key(VOTING_CONTRACT_ADDRESS_KEY));
-        } else {
-            assert_caller(get_key(DEPLOYER_ADDRESS_KEY));
-            set_key(VOTING_CONTRACT_CHANGED_KEY, true);
-        }
-        set_key(VOTING_CONTRACT_ADDRESS_KEY, new_voting_contract_address);
-        set_key(VOTING_CONTRACT_HASH_KEY, new_voting_contract_hash);
+    fn get_policing_ratio() -> u64 {
+        let args: RuntimeArgs = RuntimeArgs::new();
+        runtime::call_contract::<u64>(
+            get_key(GOVERNANCE_CONTRACT_HASH_KEY),
+            "policing_ratio",
+            args,
+        )
+    }
+    fn internal_get_policing_ratio() -> u64 {
+        let args: RuntimeArgs = RuntimeArgs::new();
+        runtime::call_contract::<u64>(
+            get_key(GOVERNANCE_CONTRACT_HASH_KEY),
+            "policing_ratio",
+            args,
+        )
     }
 
     #[casperlabs_method]
@@ -105,15 +105,15 @@ mod ProposawlEngine {
         storage_fingerprint: String,
         category: u8,
         citations: Vec<u64>,
-        ratios: Vec<u8>,
+        ratios: (u64, u64, u64),
         vote_configuration: ((u64, U256), (u8, u64, U256)),
-        milestones: Vec<(u8, u8, Vec<(u8, U256, U256)>)>,
+        milestones: Vec<((u8, u8, Vec<(u8, U256, U256)>), u64)>,
         staked_rep: U256,
         sponsors: Vec<(AccountHash, U256)>,
         cost: U256,
     ) {
         let caller = runtime::get_caller();
-        let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
+        let reputation_contract_hash: ContractHash = internal_get_reputation_contract_hash();
         let voting_contract_changed: bool = get_key(VOTING_CONTRACT_CHANGED_KEY);
         if !voting_contract_changed {
             runtime::revert(Error::InvalidVotingContractAddress);
@@ -132,8 +132,7 @@ mod ProposawlEngine {
         let reputation_balance: U256 =
             runtime::call_contract::<U256>(reputation_contract_hash, "balanceOf", balance_of_args);
 
-        // TO DO: Use Oracles to get $100 Equivalent
-        let system_policing_ratio: u8 = get_key(POLICING_RATIO);
+        let system_policing_ratio: u64 = internal_get_policing_ratio();
 
         let proposal: Proposal = Proposal::new(
             name,
@@ -164,12 +163,12 @@ mod ProposawlEngine {
         transfer_args.insert("to", voting_contract_address);
         transfer_args.insert("amount", staked_rep);
         // Create new vote in voting engine
-        let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
+        let reputation_contract_hash: ContractHash = internal_get_reputation_contract_hash();
         runtime::call_contract::<bool>(reputation_contract_hash, "transferFrom", transfer_args);
         let mut new_vote_args: RuntimeArgs = RuntimeArgs::new();
         new_vote_args.insert("proposal", Proposal::serialize(&proposal));
         let voting_contract_hash: ContractHash = get_key(VOTING_CONTRACT_HASH_KEY);
-        runtime::call_contract::<bool>(voting_contract_hash, "new_vote", new_vote_args);
+        runtime::call_contract::<U256>(voting_contract_hash, "new_vote", new_vote_args);
     }
 
     #[casperlabs_method]
@@ -182,7 +181,7 @@ mod ProposawlEngine {
         new_variable_key_value: (String, String),
     ) {
         let caller = runtime::get_caller();
-        let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
+        let reputation_contract_hash: ContractHash = internal_get_reputation_contract_hash();
         let voting_contract_changed: bool = get_key(VOTING_CONTRACT_CHANGED_KEY);
         if !voting_contract_changed {
             runtime::revert(Error::InvalidVotingContractAddress);
@@ -202,7 +201,6 @@ mod ProposawlEngine {
             runtime::call_contract::<U256>(reputation_contract_hash, "balanceOf", balance_of_args);
 
         // TO DO: Use Oracles to get $100 Equivalent
-        let system_policing_ratio: u8 = get_key(POLICING_RATIO);
 
         let governance_proposal: GovernanceProposal = GovernanceProposal::new(
             name,
@@ -227,7 +225,7 @@ mod ProposawlEngine {
         transfer_args.insert("to", voting_contract_address);
         transfer_args.insert("amount", staked_rep);
         // Create new vote in voting engine
-        let reputation_contract_hash: ContractHash = get_key(REPUTATION_CONTRACT_HASH_KEY);
+        let reputation_contract_hash: ContractHash = internal_get_reputation_contract_hash();
         runtime::call_contract::<bool>(reputation_contract_hash, "transferFrom", transfer_args);
         let mut new_vote_args: RuntimeArgs = RuntimeArgs::new();
         new_vote_args.insert(
