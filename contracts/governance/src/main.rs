@@ -30,6 +30,7 @@ const VOTING_CONTRACT_HASH_KEY: &str = "voting_contract_hash";
 const VOTING_ENGINE_CONTRACT_ADDRESS_KEY: &str = "voting_engine_contract_address";
 const REPUTATION_ALLOCATION_RATIO_KEY: &str = "reputation_allocation_ratio";
 const REPUTATION_CONTRACT_HASH_KEY: &str = "reputation_contract_hash";
+const EXECUTION_CONTRACT_HASH_KEY: &str = "execution_contract_hash";
 
 #[casperlabs_contract]
 mod Governance {
@@ -40,11 +41,13 @@ mod Governance {
         voting_contract_hash: ContractHash,
         reputation_contract_hash: ContractHash,
         policing_ratio: u64,
+        execution_contract_hash: ContractHash,
     ) {
         set_key(VOTING_ENGINE_CONTRACT_ADDRESS_KEY, voting_engine_address);
         set_key(POLICING_RATIO_KEY, policing_ratio);
         set_key(VOTING_CONTRACT_HASH_KEY, voting_contract_hash);
         set_key(REPUTATION_CONTRACT_HASH_KEY, reputation_contract_hash);
+        set_key(EXECUTION_CONTRACT_HASH_KEY, execution_contract_hash);
     }
 
     #[casperlabs_method]
@@ -64,6 +67,7 @@ mod Governance {
     fn policing_ratio() -> u64 {
         get_key(POLICING_RATIO_KEY)
     }
+    
     #[casperlabs_method]
     fn update_policing_ratio(update_policing_ratio: u64) -> bool {
         assert_voting_engine();
@@ -107,6 +111,15 @@ mod Governance {
         update_voting_engine_contract_hash: ContractHash,
     ) -> bool {
         set_key(VOTING_CONTRACT_HASH_KEY, update_voting_engine_contract_hash);
+        true
+    }
+    #[casperlabs_method]
+    fn execution_contract_hash() -> ContractHash {
+        get_key(EXECUTION_CONTRACT_HASH_KEY)
+    }
+    #[casperlabs_method]
+    fn update_execution_contract_hash(update_execution_contract_hash: ContractHash) -> bool {
+        set_key(EXECUTION_CONTRACT_HASH_KEY, update_execution_contract_hash);
         true
     }
 }
