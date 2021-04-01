@@ -134,12 +134,14 @@ impl Voting {
             if percentage <= proposal.vote_configuration.threshold.into() {
                 self.result = VoteResult::PassThresholdUnmet;
             } else {
-                // calculate input reputation
-                let denominator =
-                    (U256::from(10).pow(U256::from(12))) / reputation_allocation_ratio;
-                let input_reputation =
-                    (proposal.cost * U256::from(10).pow(U256::from(16))) / denominator; // 8 decimals
-                self.input_reputation = input_reputation;
+                if self.proposal_type == ProposalType::Grant {
+                    // calculate input reputation
+                    let denominator =
+                        (U256::from(10).pow(U256::from(12))) / reputation_allocation_ratio;
+                    let input_reputation =
+                        (proposal.cost * U256::from(10).pow(U256::from(16))) / denominator; // 8 decimals
+                    self.input_reputation = input_reputation;
+                }
                 self.result = VoteResult::Approved;
             }
         } else if self.against_votes >= self.for_votes {
